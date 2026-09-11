@@ -124,3 +124,8 @@ _ADAPTER: TypeAdapter[Entry] = TypeAdapter(Entry)  # 模块级单例
 _ADAPTER.dump_json(entry, exclude_none=True)  # 序列化
 _ADAPTER.validate_python(data)  # 反序列化
 ```
+
+
+## if isinstance
+
+## 
