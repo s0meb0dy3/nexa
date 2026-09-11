@@ -25,6 +25,11 @@ class NexaPaths:
     # ── 用户级路径 ────────────────────────────────────────────────────────
 
     @property
+    def config_file(self) -> Path:
+        """用户配置文件：供应商档案、默认供应商等。"""
+        return self.home / "config.toml"
+
+    @property
     def sessions_dir(self) -> Path:
         """所有项目的会话账本集中存放在家目录。"""
         return self.home / "sessions"

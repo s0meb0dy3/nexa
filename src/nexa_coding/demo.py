@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import os
 
 from nexa_agent.events import (
     AgentEndEvent,
@@ -18,7 +17,7 @@ from nexa_agent.events import (
 from nexa_agent.loop import AgentLoop
 from nexa_agent.messages import AgentMessage, UserMessage
 from nexa_agent.tools import AgentTool, AgentToolResult
-from nexa_ai.openai_compatible import OpenAICompatibleProvider
+from nexa_coding.cli import resolve_provider
 
 # ── 工具定义 ──────────────────────────────────────────────────────────────────
 
@@ -42,12 +41,8 @@ async def calculate_string_length(tool_call_id: str, arguments: dict) -> AgentTo
 
 
 async def main() -> None:
-    # 创建 OpenAI 兼容 Provider（这里使用 DeepSeek 作为示例）。
-    provider = OpenAICompatibleProvider(
-        name="deepseek",
-        api_key=os.environ["DEEPSEEK_API_KEY"],
-        base_url="https://api.deepseek.com",
-    )
+    # 从 ~/.nexa/config.toml 解析供应商档案（默认档案）。
+    provider, profile = resolve_provider()
 
     # 创建 Agent 循环，最多允许 5 轮。
     agent = AgentLoop(provider, max_turns=5)
@@ -83,12 +78,12 @@ async def main() -> None:
     ]
 
     print("=" * 60)
-    print(f"🚀 最小 Agent 演示 (Provider: {provider.name})")
+    print(f"🚀 最小 Agent 演示 (Provider: {profile.name})")
     print("=" * 60)
 
     # 运行 Agent 循环，逐个接收事件。
     async for event in agent.run(
-        model="deepseek-chat",
+        model=profile.model,
         system="你是一个有用的助手，可以查看时间和计算字符串长度。请用中文回答。",
         messages=messages,
         tools=tools,

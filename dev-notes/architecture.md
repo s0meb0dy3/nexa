@@ -26,11 +26,13 @@ my-coding-agent/
 │
 ├── src/nexa_coding/                # ── 应用层：把大脑变成真应用（组合核心+实现）──
 │   ├── tools.py                    #   四大编码工具：read / write / edit / bash
-│   ├── cli.py                      #   入口：nexa -p（print 模式）/ --tui / --output / --model
+│   ├── config.py                   #   配置文件解析（~/.nexa/config.toml 供应商档案）
+│   ├── cli.py                      #   入口：nexa -p（print）/ --tui / --provider / --model / --output
 │   ├── session.py                  #   CodingSession：持久化编码会话（load 回放、prompt 落盘、/skill 展开）
 │   ├── system_prompt.py            #   build_system_prompt：确定性纯函数拼系统提示词
 │   ├── skills.py                   #   技能加载 / /skill:name展开 / 索引
-│   ├── resources.py                #   资源路径（~/.nexa）+ markdown frontmatter 解析
+│   ├── paths.py                    #   NexaPaths：所有用户数据位置的唯一真相源（含 config.toml）
+│   ├── resources.py                #   资源路径四级发现（~/.nexa → ~/.agents → 项目）+ frontmatter 解析
 │   ├── prompt_templates.py         #   提示模板（{{var}} 渲染）
 │   ├── rendering/                  #   print 模式的事件渲染器
 │   │   ├── base.py                 #     EventRenderer 协议（render/finish）
@@ -43,10 +45,15 @@ my-coding-agent/
 │   │   └── app.py                  #     NexaTuiApp：唯一碰 Textual 的渲染层（worker 后台跑）
 │   └── demo.py                     #   教学演示脚本
 │
-└── tests/                          # 11 个测试文件，80 个测试
+├── 用户数据（不在仓库内）
+│   ├── ~/.nexa/config.toml         #   供应商档案（base_url/model/api_key）；权限 600，含密钥
+│   └── ~/.nexa/sessions/<slug>-<hash>/default.jsonl  #   按项目隔离的会话账本
+│
+└── tests/                          # 12 个测试文件，109 个测试
     ├── test_loop.py / test_harness.py / test_coding_tools.py / test_cli.py
     ├── test_session.py             #   会话层 5 个不变量
     ├── test_coding_session.py      #   CodingSession 持久化链路
+    ├── test_config.py / test_paths.py
     ├── test_skills.py / test_system_prompt.py
     ├── test_rendering.py           #   三种渲染模式
     ├── test_tui_adapter.py         #   TUI 逻辑层（不开终端）

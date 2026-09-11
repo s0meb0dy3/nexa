@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 from typing import TextIO
@@ -12,17 +11,18 @@ from typing import TextIO
 from nexa_agent.harness import AgentHarness, AgentHarnessConfig
 from nexa_agent.provider import ModelProvider
 from nexa_ai.openai_compatible import OpenAICompatibleProvider
+from nexa_coding.config import ConfigError, ProviderProfile, load_config, resolve_profile
+from nexa_coding.paths import NexaPaths
 from nexa_coding.rendering import PrintOutputMode, create_event_renderer
 from nexa_coding.tools import create_coding_tools
 from nexa_coding.tui import NexaTuiApp
 
-DEFAULT_MODEL = "deepseek-chat"
-DEFAULT_BASE_URL = "https://api.deepseek.com"
 SYSTEM_PROMPT = "你是一个谨慎的 coding agent。需要时使用工具，并简洁地报告结果。"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """解析这个一次性命令所需的最小参数。"""
+
     parser = argparse.ArgumentParser(description="运行一次 coding agent prompt")
     parser.add_argument(
         "-p",
@@ -30,7 +30,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="prompt",
         help="要执行的 prompt（print 模式必填；TUI 模式不需要）",
     )
-    parser.add_argument("--model", default=os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL))
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="使用 config.toml 里的哪个供应商档案（默认用 default_provider）",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="覆盖档案里的模型名（默认用档案里的 model）",
+    )
     parser.add_argument(
         "--output",
         type=PrintOutputMode,
@@ -49,27 +58,55 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def create_provider() -> OpenAICompatibleProvider:
-    """从环境变量创建 OpenAI 兼容 Provider。"""
-    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("请设置 DEEPSEEK_API_KEY（或 OPENAI_API_KEY）")
+def build_provider(profile: ProviderProfile) -> ModelProvider:
+    """把供应商档案变成具体的 Provider。
 
-    return OpenAICompatibleProvider(
-        name="deepseek",
-        api_key=api_key,
-        base_url=os.getenv("DEEPSEEK_BASE_URL", os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL)),
-    )
+    这里是配置（数据）和 nexa_ai（实现）之间唯一的接缝：将来接 Anthropic
+    等新协议，只需在这里加一个分支 + 在 nexa_ai 加一个类，调用方都不用动。
+    """
+
+    if profile.api == "openai":
+        return OpenAICompatibleProvider(
+            name=profile.name,
+            api_key=profile.api_key,
+            base_url=profile.base_url,
+        )
+    raise ConfigError(f"未知的 api 类型 {profile.api!r}（档案 {profile.name!r}）")
+
+
+def resolve_provider(
+    provider_name: str | None = None,
+    *,
+    config_path: Path | None = None,
+) -> tuple[ModelProvider, ProviderProfile]:
+    """读配置、选档案、造 Provider，返回 (provider, profile)。
+
+    Args:
+        provider_name: --provider 指定的档案名；None 表示用默认档案。
+        config_path: 配置文件路径；None 时用 NexaPaths 的 canonical 位置。
+
+    Raises:
+        ConfigError: 配置缺失/错误，或档案选不出来。
+    """
+
+    path = config_path if config_path is not None else NexaPaths().config_file
+    config = load_config(path)
+    profile = resolve_profile(config, provider_name)
+    return build_provider(profile), profile
 
 
 async def run_prompt(
     args: argparse.Namespace,
     *,
-    provider: ModelProvider | None = None,
+    provider: ModelProvider,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
 ) -> int:
-    """运行一条 prompt，并把最终回答和运行诊断分流输出。"""
+    """运行一条 prompt，并把最终回答和运行诊断分流输出。
+
+    provider 由调用方（main 或测试）解析好传入，这里只负责跑和渲染。
+    """
+
     try:
         cwd = args.cwd.resolve()
         if not cwd.is_dir():
@@ -78,7 +115,7 @@ async def run_prompt(
 
         harness = AgentHarness(
             AgentHarnessConfig(
-                provider=provider or create_provider(),
+                provider=provider,
                 model=args.model,
                 system=SYSTEM_PROMPT,
                 tools=create_coding_tools(cwd),
@@ -100,17 +137,23 @@ async def run_prompt(
 
 def main(argv: list[str] | None = None) -> None:
     """控制台脚本入口。"""
+
     args = parse_args(argv)
+    try:
+        provider, profile = resolve_provider(args.provider)
+    except ConfigError as error:
+        # 配置问题（没建 config.toml、档案不存在等）：友好提示而不是堆栈。
+        print(f"错误：{error}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+    # 命令行 --model 优先，否则用档案里的默认模型。
+    args.model = args.model or profile.model
+
     if args.tui:
-        try:
-            # Textual 自管事件循环，直接调用 App.run()，不要包 asyncio.run()。
-            NexaTuiApp(create_provider(), model=args.model).run()
-        except ValueError as error:
-            # 例如没配 API key：给出友好提示而不是堆栈。
-            print(f"错误：{error}", file=sys.stderr)
-            raise SystemExit(2) from None
+        # Textual 自管事件循环，直接调用 App.run()，不要包 asyncio.run()。
+        NexaTuiApp(provider, model=args.model, cwd=args.cwd.resolve()).run()
         return
-    raise SystemExit(asyncio.run(run_prompt(args)))
+    raise SystemExit(asyncio.run(run_prompt(args, provider=provider)))
 
 
-__all__ = ["create_provider", "main", "parse_args", "run_prompt"]
+__all__ = ["build_provider", "main", "parse_args", "resolve_provider", "run_prompt"]

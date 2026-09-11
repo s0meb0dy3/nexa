@@ -16,6 +16,7 @@ def test_canonical_user_paths():
     assert paths.sessions_dir == home / "sessions"
     assert paths.user_skills_dir == home / "skills"
     assert paths.user_prompts_dir == home / "prompts"
+    assert paths.config_file == home / "config.toml"
     assert paths.user_agents_skills_dir == agents / "skills"
     assert paths.user_agents_prompts_dir == agents / "prompts"
 

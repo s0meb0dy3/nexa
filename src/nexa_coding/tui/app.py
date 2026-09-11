@@ -19,9 +19,6 @@ from nexa_coding.session import CodingSession, CodingSessionConfig
 from nexa_coding.tui.adapter import TuiEventAdapter
 from nexa_coding.tui.state import ChatItemKind, TuiState
 
-# TUI 用的模型名（与 CLI 默认一致）。
-DEFAULT_MODEL = "deepseek-chat"
-
 
 class NexaTuiApp(App):
     """最简交互式 coding agent 界面。
@@ -54,16 +51,18 @@ class NexaTuiApp(App):
     }
     """
 
-    def __init__(self, provider, model: str = DEFAULT_MODEL) -> None:
+    def __init__(self, provider, *, model: str, cwd: Path) -> None:
         """初始化 TUI。
 
         Args:
-            provider: 模型 Provider（通常来自 create_provider()）。
-            model: 模型名。
+            provider: 模型 Provider（通常来自 resolve_provider()）。
+            model: 模型名（由配置档案解析得到，必填）。
+            cwd: 工具可访问的项目目录，也是会话隔离的依据。
         """
         super().__init__()
         self._provider = provider
         self._model = model
+        self._cwd = cwd
         # 纯状态 + 翻译层（都不碰 Textual，可单独测试）。
         self._state = TuiState()
         self._adapter = TuiEventAdapter(self._state)
@@ -103,7 +102,7 @@ class NexaTuiApp(App):
         """在 worker 里跑一轮 CodingSession.prompt()，把事件翻译成状态。"""
 
         session = CodingSession.load(
-            CodingSessionConfig(provider=self._provider, model=self._model, cwd=Path.cwd())
+            CodingSessionConfig(provider=self._provider, model=self._model, cwd=self._cwd)
         )
 
         async for event in session.prompt(text):
