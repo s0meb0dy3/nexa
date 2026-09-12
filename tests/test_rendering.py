@@ -8,10 +8,11 @@ from io import StringIO
 from nexa_agent.events import (
     AgentEndEvent,
     AgentStartEvent,
+    MessageEndEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
 )
-from nexa_agent.messages import AssistantMessage, TextContent
+from nexa_agent.messages import AssistantMessage, TextContent, ThinkingContent
 from nexa_agent.tools import AgentToolResult
 from nexa_coding.rendering import PrintOutputMode, create_event_renderer
 
@@ -107,3 +108,52 @@ def test_text_mode_error_answer_returns_false():
     # 错误详情进 stderr，stdout 保持干净。
     assert stdout.getvalue() == ""
     assert "连接失败" in stderr.getvalue()
+
+
+# ── 思考块展示 ────────────────────────────────────────────────────────────────
+
+
+def _thinking_events() -> list:
+    """一条带思考的助手消息：MessageEnd（带思考）+ AgentEnd（含最终答案）。"""
+    message = AssistantMessage(
+        content=[ThinkingContent(text="先分析一下"), TextContent(text="最终答案")]
+    )
+    return [MessageEndEvent(message=message), AgentEndEvent(messages=[message])]
+
+
+def test_text_mode_hides_thinking():
+    """text 模式的 stdout 只出答案，思考不出现（管道保持干净）。"""
+    stdout, stderr = StringIO(), StringIO()
+    renderer = create_event_renderer(PrintOutputMode.text, stdout=stdout, stderr=stderr)
+
+    ok = _render(renderer, _thinking_events())
+
+    assert ok is True
+    assert stdout.getvalue() == "最终答案\n"
+    assert "先分析一下" not in stdout.getvalue()
+    assert stderr.getvalue() == ""
+
+
+def test_transcript_mode_sends_thinking_to_stderr():
+    """transcript 模式：思考进 stderr，答案进 stdout。"""
+    stdout, stderr = StringIO(), StringIO()
+    renderer = create_event_renderer(PrintOutputMode.transcript, stdout=stdout, stderr=stderr)
+
+    ok = _render(renderer, _thinking_events())
+
+    assert ok is True
+    assert "最终答案" in stdout.getvalue()
+    assert "先分析一下" not in stdout.getvalue()
+    assert "先分析一下" in stderr.getvalue()
+
+
+def test_json_mode_includes_thinking():
+    """json 模式序列化的事件里包含思考块。"""
+    stdout, stderr = StringIO(), StringIO()
+    renderer = create_event_renderer(PrintOutputMode.json, stdout=stdout, stderr=stderr)
+
+    _render(renderer, _thinking_events())
+
+    output = stdout.getvalue()
+    assert '"type":"thinking"' in output
+    assert "先分析一下" in output

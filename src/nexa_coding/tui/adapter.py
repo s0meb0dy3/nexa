@@ -16,6 +16,7 @@ from nexa_agent.events import (
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
 )
+from nexa_agent.messages import AssistantMessage
 from nexa_coding.tui.state import TuiState
 
 
@@ -52,9 +53,14 @@ class TuiEventAdapter:
             if event.message.role == "assistant" and event.message.text:
                 self._state.start_assistant()
         elif isinstance(event, MessageEndEvent):
-            if event.message.role == "assistant" and event.message.text:
-                # 整条消息粒度：消息到达时合并成一条完整显示。
-                self._state.end_assistant(event.message.text)
+            # 整条消息粒度：消息到达时把思考、正文分别合并成记录。
+            message = event.message
+            if isinstance(message, AssistantMessage):
+                # 先记思考（推理发生在正文之前），再记正文。
+                if message.thinking:
+                    self._state.add_thinking(message.thinking)
+                if message.text:
+                    self._state.end_assistant(message.text)
         elif isinstance(event, ToolExecutionStartEvent):
             self._state.add_tool(event.tool_name, "开始")
         elif isinstance(event, ToolExecutionUpdateEvent):

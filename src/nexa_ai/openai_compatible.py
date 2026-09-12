@@ -12,6 +12,7 @@ from nexa_agent.messages import (
     AgentMessage,
     AssistantMessage,
     TextContent,
+    ThinkingContent,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -117,8 +118,10 @@ class OpenAICompatibleProvider:
                     yield ProviderResponseStartEvent(model=model)
 
                     # 逐步累积助手消息的内容。
-                    content_blocks: list[TextContent | ToolCall] = []
+                    content_blocks: list[TextContent | ThinkingContent | ToolCall] = []
                     text_buffer = ""
+                    # 推理内容单独累积（DeepSeek 的 reasoning_content / Ollama 的 reasoning）。
+                    reasoning_buffer = ""
                     # 用字典暂存工具调用的各个部分，key 是工具在列表中的索引。
                     tool_buffers: dict[int, dict] = {}
 
@@ -138,6 +141,12 @@ class OpenAICompatibleProvider:
                         delta = choices[0].get("delta")
                         if not delta:
                             continue
+
+                        # 处理推理内容增量：推理模型（DeepSeek reasoner、qwen3 等）
+                        # 会把思考吐在独立字段里。这里只累积，不产生增量事件。
+                        reasoning_delta = self._reasoning_delta(delta)
+                        if reasoning_delta:
+                            reasoning_buffer += reasoning_delta
 
                         # 处理文本增量：模型每次吐出一小段文字。
                         text_delta = delta.get("content")
@@ -164,7 +173,11 @@ class OpenAICompatibleProvider:
                                 if args_chunk:
                                     tool_buffers[idx]["arguments"] += args_chunk
 
-                    # 流结束后，把累积的文本转成 TextContent。
+                    # 流结束后，先放思考块（推理发生在正文之前），再放正文。
+                    if reasoning_buffer:
+                        content_blocks.append(ThinkingContent(text=reasoning_buffer))
+
+                    # 把累积的文本转成 TextContent。
                     if text_buffer:
                         content_blocks.append(TextContent(text=text_buffer))
 
@@ -199,6 +212,23 @@ class OpenAICompatibleProvider:
                 # 部分 httpx 异常（例如连接被对端提前关闭）没有错误文本。
                 message = str(e) or f"{type(e).__name__}（未提供详情）"
                 yield ProviderErrorEvent(message=message)
+
+    @staticmethod
+    def _reasoning_delta(delta: dict) -> str:
+        """从 SSE 的 delta 里取出这一段思考文字。
+
+        不同后端的字段名不一样：
+        - DeepSeek：reasoning_content
+        - Ollama 等：reasoning
+
+        都没有（或为空）时返回空字符串。
+        """
+
+        for key in ("reasoning_content", "reasoning"):
+            value = delta.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return ""
 
     def _parse_sse_line(self, line: str) -> dict | str | None:
         """解析一行 SSE 数据。
@@ -240,6 +270,9 @@ class OpenAICompatibleProvider:
 
             elif isinstance(msg, AssistantMessage):
                 # 助手消息：可能同时包含文字和工具调用。
+                # 注意：思考块（ThinkingContent）有意不回传——只取 msg.text（正文）
+                # 和 msg.tool_calls。DeepSeek 这类接口不接受把推理内容塞回请求；
+                # 将来接 Anthropic 时，带签名的思考需要按其要求回传，届时应新增适配器处理。
                 entry: dict = {"role": "assistant"}
                 text = msg.text
                 tool_calls = msg.tool_calls

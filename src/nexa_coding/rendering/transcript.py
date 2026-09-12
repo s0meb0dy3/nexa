@@ -11,9 +11,11 @@ from typing import TextIO
 from nexa_agent.events import (
     AgentEndEvent,
     AgentEvent,
+    MessageEndEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
 )
+from nexa_agent.messages import AssistantMessage
 
 
 class TranscriptRenderer:
@@ -27,7 +29,7 @@ class TranscriptRenderer:
         self._failed = False
 
     def render(self, event: AgentEvent) -> None:
-        """分流事件：助手答案存起来，工具过程立即打印。"""
+        """分流事件：助手答案存起来，思考与工具过程立即打印。"""
 
         if isinstance(event, ToolExecutionStartEvent):
             print(f"工具开始：{event.tool_name}", file=self._stderr)
@@ -35,6 +37,10 @@ class TranscriptRenderer:
             prefix = "工具失败" if event.is_error else "工具结束"
             print(f"{prefix}：{event.tool_name}", file=self._stderr)
             self._failed |= event.is_error
+        elif isinstance(event, MessageEndEvent) and isinstance(event.message, AssistantMessage):
+            # 思考属于"过程"，打到 stderr，不污染 stdout 的最终答案。
+            if event.message.thinking:
+                print(f"思考：{event.message.thinking}", file=self._stderr)
         elif isinstance(event, AgentEndEvent):
             # 从后往前找第一条有文字的助手消息，作为最终答案。
             for message in reversed(event.messages):

@@ -18,6 +18,8 @@ class ChatItemKind(StrEnum):
     user = "user"
     # 助手回复
     assistant = "assistant"
+    # 思考内容（推理模型的推理过程）
+    thinking = "thinking"
     # 工具执行
     tool = "tool"
 
@@ -49,6 +51,8 @@ class TuiState:
     running: bool = False
     # 最近一次错误，None 表示无错误。
     error: str | None = None
+    # 是否展开显示思考内容；默认折叠（推理往往很长）。
+    show_thinking: bool = False
 
     # ── 状态修改方法 ──────────────────────────────────────────────────────
 
@@ -79,6 +83,16 @@ class TuiState:
         self.chat_items.append(
             ChatItem(kind=ChatItemKind.tool, text=f"{name} — {status}", error=error)
         )
+
+    def add_thinking(self, text: str) -> None:
+        """记录一条思考内容。"""
+
+        self.chat_items.append(ChatItem(kind=ChatItemKind.thinking, text=text))
+
+    def toggle_thinking(self) -> None:
+        """切换思考内容的展开/折叠。"""
+
+        self.show_thinking = not self.show_thinking
 
     def set_running(self, running: bool) -> None:
         """更新运行状态。"""

@@ -26,9 +26,10 @@ class NexaTuiApp(App):
     用法：uv run nexa --tui
     """
 
-    # 键盘绑定：Escape 中断当前运行。
+    # 键盘绑定：Escape 中断当前运行，Ctrl+T 展开/折叠思考。
     BINDINGS = [
         Binding("escape", "cancel", "取消"),
+        Binding("ctrl+t", "toggle_thinking", "思考"),
         Binding("ctrl+q", "quit", "退出"),
     ]
 
@@ -120,6 +121,12 @@ class NexaTuiApp(App):
             self._state.add_tool("运行", "已取消")
             self._refresh()
 
+    def action_toggle_thinking(self) -> None:
+        """Ctrl+T：展开/折叠所有思考内容。"""
+
+        self._state.toggle_thinking()
+        self._refresh()
+
     # ── 刷新 ─────────────────────────────────────────────────────────────
 
     def _refresh(self) -> None:
@@ -135,6 +142,12 @@ class NexaTuiApp(App):
                 transcript.write(f"你：{item.text}")
             elif item.kind == ChatItemKind.assistant:
                 transcript.write(f"🤖 {item.text}")
+            elif item.kind == ChatItemKind.thinking:
+                # 思考默认折叠成一行摘要，Ctrl+T 展开看全文。
+                if self._state.show_thinking:
+                    transcript.write(f"💭 {item.text}")
+                else:
+                    transcript.write(f"💭 思考了 {len(item.text)} 字（Ctrl+T 展开）")
             else:
                 prefix = "⚠" if item.error else "🔧"
                 transcript.write(f"{prefix} {item.text}")

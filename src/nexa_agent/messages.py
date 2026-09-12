@@ -67,6 +67,28 @@ class ToolCall(WireModel):
     arguments: dict[str, JSONValue] = Field(default_factory=dict)
 
 
+class ThinkingContent(WireModel):
+    """模型的思考（推理）内容块。
+
+    和 TextContent、ToolCall 平级，一起按顺序存在 AssistantMessage.content 里，
+    因此会自动跟随消息走完整条链路：事件流 → 会话账本 → 回放 → 展示。
+
+    不同的 Provider 会把它编码成不同字段（DeepSeek 的 reasoning_content、
+    Ollama 的 reasoning 等），但核心层只把它当"一段文字"看待。
+
+    Attributes:
+        text: 思考正文。
+        signature: 供应商拥有的不透明状态（例如 Anthropic 的签名），原样存取、
+            不解析。DeepSeek 这类不带签名的 Provider 保持 None。
+    """
+
+    type: Literal["thinking"] = "thinking"
+    # 思考的正文文字。
+    text: str
+    # 不透明的供应商状态：只负责原样保存和还原，核心层不解释它的含义。
+    signature: str | None = None
+
+
 class UserMessage(WireModel):
     """用户发送给 Agent 的消息。"""
 
@@ -92,9 +114,9 @@ class AssistantMessage(WireModel):
 
     # role 固定为 "assistant"，表示消息来自助手。
     role: Literal["assistant"] = "assistant"
-    # 内容按顺序保存；每一项要么是文字，要么是工具调用。
+    # 内容按顺序保存；每一项要么是文字，要么是思考，要么是工具调用。
     # 没有内容时，使用一个新的空列表。
-    content: list[TextContent | ToolCall] = Field(default_factory=list)
+    content: list[TextContent | ThinkingContent | ToolCall] = Field(default_factory=list)
 
     # 在 Pydantic 正式检查字段之前，先把输入格式整理一下。
     @model_validator(mode="before")
@@ -118,10 +140,17 @@ class AssistantMessage(WireModel):
 
     @property
     def text(self) -> str:
-        """只取出助手消息里的文字，忽略工具调用。"""
+        """只取出助手消息里的文字，忽略思考和工具调用。"""
 
         # 只保留 TextContent，再把它们的文字拼接起来。
         return "".join(block.text for block in self.content if isinstance(block, TextContent))
+
+    @property
+    def thinking(self) -> str:
+        """只取出助手消息里的思考文字，忽略正文和工具调用。"""
+
+        # 只保留 ThinkingContent，再把它们的思考文字拼接起来。
+        return "".join(block.text for block in self.content if isinstance(block, ThinkingContent))
 
     @property
     def tool_calls(self) -> tuple[ToolCall, ...]:
@@ -192,6 +221,7 @@ __all__ = [
     "AssistantMessage",
     "Message",
     "TextContent",
+    "ThinkingContent",
     "ToolCall",
     "ToolResultMessage",
     "UserMessage",

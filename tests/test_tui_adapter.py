@@ -11,7 +11,7 @@ from nexa_agent.events import (
     ToolExecutionStartEvent,
     TurnStartEvent,
 )
-from nexa_agent.messages import AssistantMessage, TextContent
+from nexa_agent.messages import AssistantMessage, TextContent, ThinkingContent
 from nexa_agent.tools import AgentToolResult
 from nexa_coding.tui.adapter import TuiEventAdapter
 from nexa_coding.tui.state import ChatItemKind, TuiState
@@ -111,3 +111,41 @@ def test_ignored_and_unknown_events_do_not_crash():
     adapter.apply(UnknownEvent())  # type: ignore[arg-type]
     assert state.error is None
     assert state.chat_items == []
+
+
+def test_thinking_and_answer_become_two_items():
+    """带思考的消息 → 先 thinking 记录，再 assistant 记录。"""
+    state, adapter = _make_adapter()
+    message = AssistantMessage(
+        content=[ThinkingContent(text="让我想想"), TextContent(text="答案是 2")]
+    )
+
+    adapter.apply(MessageEndEvent(message=message))
+
+    assert len(state.chat_items) == 2
+    assert state.chat_items[0].kind == ChatItemKind.thinking
+    assert state.chat_items[0].text == "让我想想"
+    assert state.chat_items[1].kind == ChatItemKind.assistant
+    assert state.chat_items[1].text == "答案是 2"
+
+
+def test_thinking_only_message_still_shows():
+    """只有思考、没有正文的消息也要产生 thinking 记录。"""
+    state, adapter = _make_adapter()
+    message = AssistantMessage(content=[ThinkingContent(text="只在思考")])
+
+    adapter.apply(MessageEndEvent(message=message))
+
+    assert len(state.chat_items) == 1
+    assert state.chat_items[0].kind == ChatItemKind.thinking
+
+
+def test_toggle_thinking_flips_flag():
+    """toggle_thinking 在展开/折叠之间翻转。"""
+    state = TuiState()
+
+    assert state.show_thinking is False
+    state.toggle_thinking()
+    assert state.show_thinking is True
+    state.toggle_thinking()
+    assert state.show_thinking is False
