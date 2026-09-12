@@ -10,6 +10,7 @@ from nexa_agent.events import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
+    MessageDeltaEvent,
     MessageEndEvent,
     MessageStartEvent,
     ToolExecutionEndEvent,
@@ -50,17 +51,23 @@ class TuiEventAdapter:
             # 这里不反查 messages，避免重复显示。
             self._state.set_running(False)
         elif isinstance(event, MessageStartEvent):
-            if event.message.role == "assistant" and event.message.text:
+            # 助手开始输出（流式时携带空消息）：进入流式状态准备累积。
+            if event.message.role == "assistant":
                 self._state.start_assistant()
+        elif isinstance(event, MessageDeltaEvent):
+            # 流式片段：按 kind 分别追加到正文 / 思考缓冲。
+            if event.kind == "reasoning":
+                self._state.append_thinking_delta(event.delta)
+            else:
+                self._state.append_assistant_delta(event.delta)
         elif isinstance(event, MessageEndEvent):
-            # 整条消息粒度：消息到达时把思考、正文分别合并成记录。
+            # 完整消息到达：以它为准提交思考与正文，并重置流式状态。
             message = event.message
             if isinstance(message, AssistantMessage):
                 # 先记思考（推理发生在正文之前），再记正文。
                 if message.thinking:
                     self._state.add_thinking(message.thinking)
-                if message.text:
-                    self._state.end_assistant(message.text)
+                self._state.end_assistant(message.text)
         elif isinstance(event, ToolExecutionStartEvent):
             self._state.add_tool(event.tool_name, "开始")
         elif isinstance(event, ToolExecutionUpdateEvent):

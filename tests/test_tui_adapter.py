@@ -5,6 +5,7 @@ from __future__ import annotations
 from nexa_agent.events import (
     AgentEndEvent,
     AgentStartEvent,
+    MessageDeltaEvent,
     MessageEndEvent,
     MessageStartEvent,
     ToolExecutionEndEvent,
@@ -149,3 +150,58 @@ def test_toggle_thinking_flips_flag():
     assert state.show_thinking is True
     state.toggle_thinking()
     assert state.show_thinking is False
+
+
+def test_streaming_deltas_accumulate_then_commit():
+    """流式：delta 累积到缓冲，MessageEnd 时以完整消息提交。"""
+    state, adapter = _make_adapter()
+
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(MessageDeltaEvent(kind="text", delta="你"))
+    adapter.apply(MessageDeltaEvent(kind="text", delta="好"))
+
+    # 流式中：内容还在缓冲，尚未成为正式记录。
+    assert state.streaming_started is True
+    assert state.streaming_text == "你好"
+    assert state.chat_items == []
+
+    adapter.apply(MessageEndEvent(message=AssistantMessage(content=[TextContent(text="你好")])))
+
+    # 提交后：缓冲清空，正式记录产生。
+    assert state.streaming_started is False
+    assert state.streaming_text == ""
+    assert len(state.chat_items) == 1
+    assert state.chat_items[0].text == "你好"
+
+
+def test_streaming_reasoning_delta_goes_to_thinking_buffer():
+    """kind=reasoning 的 delta 进思考缓冲，与正文分开。"""
+    state, adapter = _make_adapter()
+
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(MessageDeltaEvent(kind="reasoning", delta="想"))
+    adapter.apply(MessageDeltaEvent(kind="reasoning", delta="想"))
+    adapter.apply(MessageDeltaEvent(kind="text", delta="答案"))
+
+    assert state.streaming_thinking == "想想"
+    assert state.streaming_text == "答案"
+
+
+def test_message_start_with_empty_message_enters_streaming():
+    """流式的 MessageStart 携带空消息，也应进入流式状态。"""
+    state, adapter = _make_adapter()
+
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+
+    assert state.streaming_started is True
+
+
+def test_end_without_text_does_not_add_item():
+    """MessageEnd 无正文（例如只调用工具）时只重置状态，不产生记录。"""
+    state, adapter = _make_adapter()
+
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(MessageEndEvent(message=AssistantMessage()))
+
+    assert state.chat_items == []
+    assert state.streaming_started is False

@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from nexa_agent.messages import AssistantMessage, ToolCall, WireModel
+from nexa_agent.types import DeltaKind
 
 
 class ProviderResponseStartEvent(WireModel):
@@ -21,10 +22,16 @@ class ProviderResponseStartEvent(WireModel):
     model: str
 
 
-class ProviderTextDeltaEvent(WireModel):
-    """模型流式输出的一小段文本。"""
+class ProviderDeltaEvent(WireModel):
+    """模型流式输出的一小段：正文或思考。
 
-    type: Literal["text_delta"] = "text_delta"
+    kind="text" 表示正文片段，kind="reasoning" 表示思考片段。
+    两类共用同一个事件，消费端靠 kind 区分，不需要各自一套事件。
+    """
+
+    type: Literal["delta"] = "delta"
+    # 片段类别：正文 or 思考。
+    kind: DeltaKind = "text"
     delta: str
 
 
@@ -53,7 +60,7 @@ class ProviderErrorEvent(WireModel):
 # 根据 type 字段，Pydantic 可以把字典解析成对应的事件类。
 type ProviderEvent = Annotated[
     ProviderResponseStartEvent
-    | ProviderTextDeltaEvent
+    | ProviderDeltaEvent
     | ProviderToolCallEvent
     | ProviderResponseEndEvent
     | ProviderErrorEvent,
@@ -62,10 +69,10 @@ type ProviderEvent = Annotated[
 
 
 __all__ = [
+    "ProviderDeltaEvent",
     "ProviderErrorEvent",
     "ProviderEvent",
     "ProviderResponseEndEvent",
     "ProviderResponseStartEvent",
-    "ProviderTextDeltaEvent",
     "ProviderToolCallEvent",
 ]

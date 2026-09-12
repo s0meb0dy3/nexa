@@ -18,11 +18,11 @@ from nexa_agent.messages import (
     UserMessage,
 )
 from nexa_agent.provider_events import (
+    ProviderDeltaEvent,
     ProviderErrorEvent,
     ProviderEvent,
     ProviderResponseEndEvent,
     ProviderResponseStartEvent,
-    ProviderTextDeltaEvent,
 )
 from nexa_agent.tools import AgentTool
 
@@ -143,16 +143,17 @@ class OpenAICompatibleProvider:
                             continue
 
                         # 处理推理内容增量：推理模型（DeepSeek reasoner、qwen3 等）
-                        # 会把思考吐在独立字段里。这里只累积，不产生增量事件。
+                        # 会把思考吐在独立字段里，作为 kind="reasoning" 的片段发出。
                         reasoning_delta = self._reasoning_delta(delta)
                         if reasoning_delta:
                             reasoning_buffer += reasoning_delta
+                            yield ProviderDeltaEvent(kind="reasoning", delta=reasoning_delta)
 
                         # 处理文本增量：模型每次吐出一小段文字。
                         text_delta = delta.get("content")
                         if text_delta:
                             text_buffer += text_delta
-                            yield ProviderTextDeltaEvent(delta=text_delta)
+                            yield ProviderDeltaEvent(kind="text", delta=text_delta)
 
                         # 处理工具调用增量：模型可能分多个 chunk 传完一个工具调用。
                         tool_calls_delta = delta.get("tool_calls")

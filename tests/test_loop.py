@@ -7,6 +7,9 @@ import pytest
 from nexa_agent.events import (
     AgentEndEvent,
     AgentStartEvent,
+    MessageDeltaEvent,
+    MessageEndEvent,
+    MessageStartEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     TurnStartEvent,
@@ -19,6 +22,7 @@ from nexa_agent.messages import (
     UserMessage,
 )
 from nexa_agent.provider_events import (
+    ProviderDeltaEvent,
     ProviderErrorEvent,
     ProviderResponseEndEvent,
     ProviderResponseStartEvent,
@@ -96,6 +100,48 @@ async def test_loop_without_tools():
     assert isinstance(end_event, AgentEndEvent)
     assistant_msgs = [m for m in end_event.messages if isinstance(m, AssistantMessage)]
     assert assistant_msgs[-1].text == "你好！我是助手。"
+
+
+@pytest.mark.asyncio
+async def test_loop_forwards_deltas_between_start_and_end():
+    """流式：MessageStart（空）→ 逐段 MessageDelta → MessageEnd（完整消息）。"""
+
+    provider = FakeProvider(
+        [
+            [
+                ProviderResponseStartEvent(model="test"),
+                ProviderDeltaEvent(kind="text", delta="你"),
+                ProviderDeltaEvent(kind="reasoning", delta="想"),
+                ProviderDeltaEvent(kind="text", delta="好"),
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(content=[TextContent(text="你好")])
+                ),
+            ]
+        ]
+    )
+
+    agent = AgentLoop(provider)
+    events = await _collect_events(agent, tools=[])
+
+    # 找到消息生命周期这一段。
+    starts = [i for i, e in enumerate(events) if isinstance(e, MessageStartEvent)]
+    ends = [i for i, e in enumerate(events) if isinstance(e, MessageEndEvent)]
+    assert len(starts) == 1 and len(ends) == 1
+    assert starts[0] < ends[0]
+
+    # MessageStart 携带空消息（只表示"开始"）。
+    assert events[starts[0]].message.text == ""
+
+    # 中间的 delta 按顺序、按 kind 转发。
+    deltas = [e for e in events if isinstance(e, MessageDeltaEvent)]
+    assert [(d.kind, d.delta) for d in deltas] == [
+        ("text", "你"),
+        ("reasoning", "想"),
+        ("text", "好"),
+    ]
+
+    # MessageEnd 携带完整消息。
+    assert events[ends[0]].message.text == "你好"
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ from nexa_agent.events import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
+    MessageDeltaEvent,
     MessageEndEvent,
     MessageStartEvent,
     ToolExecutionEndEvent,
@@ -144,8 +145,12 @@ class AgentLoop:
     ) -> AsyncIterator[AgentEvent]:
         """翻译层：把 Provider 的"模型语言"翻译成 Agent 的"消息生命周期语言"。
 
-        Provider 事件（response_start, text_delta, response_end 等）
-        → Agent 事件（MessageStartEvent, MessageEndEvent）
+        Provider 事件（response_start, delta, response_end 等）
+        → Agent 事件（MessageStartEvent, MessageDeltaEvent, MessageEndEvent）
+
+        流式：先发一个空消息的 MessageStartEvent 表示"开始输出"，随后每个
+        Provider delta 转发成一个 MessageDeltaEvent，最后用 MessageEndEvent
+        携带完整消息收尾。完整消息仍是唯一"事实来源"，落账本与最终答案都靠它。
         """
 
         # 调用 Provider 的流式接口，拿到一组事件。
@@ -156,11 +161,17 @@ class AgentLoop:
             tools=tools,
         )
 
-        # 遍历 Provider 返回的事件流，从中提取完整的助手消息。
+        # 开始输出：先发空消息，让下游可以准备流式缓冲。
+        yield MessageStartEvent(message=AssistantMessage())
+
+        # 遍历 Provider 事件流：增量实时转发，完整消息与错误留到最后。
         final_message: AssistantMessage | None = None
 
         async for event in stream:
-            if event.type == "response_end":
+            if event.type == "delta":
+                # 正文 / 思考的增量片段，原样转成 Agent 层增量事件。
+                yield MessageDeltaEvent(kind=event.kind, delta=event.delta)
+            elif event.type == "response_end":
                 # 模型响应结束，携带完整的助手消息。
                 final_message = event.message
             elif event.type == "error":
@@ -175,8 +186,7 @@ class AgentLoop:
         if final_message is None:
             final_message = AssistantMessage()
 
-        # 产出 Agent 层的消息生命周期事件。
-        yield MessageStartEvent(message=final_message)
+        # 产出完整消息，收尾。
         yield MessageEndEvent(message=final_message)
 
     async def _execute_tool_call(

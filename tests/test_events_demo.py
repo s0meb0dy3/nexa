@@ -37,9 +37,9 @@ from nexa_agent.harness import AgentHarness, AgentHarnessConfig
 from nexa_agent.loop import AgentLoop
 from nexa_agent.messages import AssistantMessage, TextContent, ToolCall, UserMessage
 from nexa_agent.provider_events import (
+    ProviderDeltaEvent,
     ProviderResponseEndEvent,
     ProviderResponseStartEvent,
-    ProviderTextDeltaEvent,
 )
 from nexa_agent.tools import AgentTool, AgentToolResult
 from nexa_ai.fake import FakeProvider
@@ -68,9 +68,9 @@ def _provider_replying_text(text: str) -> FakeProvider:
         [
             [
                 ProviderResponseStartEvent(model="test-model"),
-                ProviderTextDeltaEvent(delta="你好"),
-                ProviderTextDeltaEvent(delta="，"),
-                ProviderTextDeltaEvent(delta=text),
+                ProviderDeltaEvent(delta="你好"),
+                ProviderDeltaEvent(delta="，"),
+                ProviderDeltaEvent(delta=text),
                 ProviderResponseEndEvent(
                     message=AssistantMessage(content=[TextContent(text=f"你好，{text}")])
                 ),
@@ -181,18 +181,22 @@ async def test_02_event_stream_basics():
         count += 1
         types.append(event.type)
 
-    # 模型直接回复、没有工具调用 → 最小的事件序列是 4 个：
-    # agent_start → turn_start → (message_start → message_end 被转发) → turn_end → agent_end
+    # 模型直接回复、没有工具调用。流式下每个增量都会转发：
+    # agent_start → turn_start → message_start → delta×3 → message_end
+    # → turn_end → agent_end
     print("收到的事件序列：", types)
     assert types == [
         "agent_start",
         "turn_start",
         "message_start",
+        "message_delta",
+        "message_delta",
+        "message_delta",
         "message_end",
         "turn_end",
         "agent_end",
     ]
-    assert count == 6
+    assert count == 9
 
 
 # ── 示例 3：一次完整运行的事件顺序 ────────────────────────────────────────────
@@ -294,11 +298,11 @@ async def test_05_two_event_systems():
     """项目里有两套事件，各管一段：
 
     ProviderEvent（nexa_agent/provider_events.py，5 种）—— 描述"模型正在说话"：
-        response_start / text_delta / tool_call / response_end / error
-    AgentEvent（nexa_agent/events.py，9 种）—— 描述"agent 整体在干什么"
+        response_start / delta / tool_call / response_end / error
+    AgentEvent（nexa_agent/events.py，10 种）—— 描述"agent 整体在干什么"
 
     AgentLoop 是翻译层：消费 Provider 事件，产出 Agent 事件。
-    注意 text_delta 在这里被攒起来 —— 下游收到的是拼好的完整消息。
+    流式：每个 delta 被原样转发成 MessageDeltaEvent；完整消息在 message_end。
     """
 
     provider = _provider_replying_text("我是助手")
@@ -313,12 +317,12 @@ async def test_05_two_event_systems():
     provider_types = []
     async for event in provider_stream:
         provider_types.append(event.type)
-    # 模型语言的流：开始 → 3 个文字增量 → 结束
+    # 模型语言的流：开始 → 3 个增量 → 结束
     assert provider_types == [
         "response_start",
-        "text_delta",
-        "text_delta",
-        "text_delta",
+        "delta",
+        "delta",
+        "delta",
         "response_end",
     ]
 
@@ -333,11 +337,15 @@ async def test_05_two_event_systems():
         tools=[],
     ):
         agent_types.append(event.type)
-    # 生命周期语言的流：3 个 text_delta 被翻译成 message_start / message_end
+    # 生命周期语言的流：message_start 表示开始，3 个 delta 实时转发，
+    # message_end 携带完整消息收尾。
     assert agent_types == [
         "agent_start",
         "turn_start",
         "message_start",
+        "message_delta",
+        "message_delta",
+        "message_delta",
         "message_end",
         "turn_end",
         "agent_end",

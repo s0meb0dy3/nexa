@@ -15,7 +15,7 @@ from nexa_agent.messages import AgentMessage, ToolResultMessage, WireModel
 from nexa_agent.tools import AgentToolResult
 
 # JSONValue 表示任意合法的 JSON 值，例如字符串、数字、列表或字典。
-from nexa_agent.types import JSONValue
+from nexa_agent.types import DeltaKind, JSONValue
 
 # 可以把事件理解成 Agent 发出的“我现在进行到哪一步了”的通知。
 # 大致流程是：Agent 开始 -> 一轮对话开始 -> 消息/工具执行 -> 一轮结束 -> Agent 结束。
@@ -56,12 +56,27 @@ class TurnEndEvent(WireModel):
 
 
 class MessageStartEvent(WireModel):
-    """开始处理一条消息时发出的事件。"""
+    """开始处理一条消息时发出的事件。
+
+    流式场景下，它在模型开始吐字时就发出（携带一条空消息表示"开始了"），
+    随后由 MessageDeltaEvent 逐个送来片段；最终完整内容在 MessageEndEvent 里。
+    """
 
     # type 固定为 "message_start"，用来识别事件类型。
     type: Literal["message_start"] = "message_start"
-    # 正在开始处理的具体消息。
+    # 正在开始处理的具体消息；流式时通常是空消息。
     message: AgentMessage
+
+
+class MessageDeltaEvent(WireModel):
+    """助手消息流式输出的一小段：正文或思考。"""
+
+    # type 固定为 "message_delta"，用来识别事件类型。
+    type: Literal["message_delta"] = "message_delta"
+    # 片段类别：正文（text）或思考（reasoning）。
+    kind: DeltaKind = "text"
+    # 这一小段的文字。
+    delta: str
 
 
 class MessageEndEvent(WireModel):
@@ -117,7 +132,7 @@ class ToolExecutionEndEvent(WireModel):
 
 
 # AgentEvent 表示所有可能的事件类型。
-# 这里的 | 表示“或者”：一个 AgentEvent 可以是下面九种事件中的一种。
+# 这里的 | 表示"或者"：一个 AgentEvent 可以是下面十种事件中的一种。
 # discriminator="type" 告诉 Pydantic 根据 type 字段选择具体的事件类。
 # 例如 type="agent_start" 就解析成 AgentStartEvent。
 type AgentEvent = Annotated[
@@ -126,6 +141,7 @@ type AgentEvent = Annotated[
     | TurnStartEvent
     | TurnEndEvent
     | MessageStartEvent
+    | MessageDeltaEvent
     | MessageEndEvent
     | ToolExecutionStartEvent
     | ToolExecutionUpdateEvent

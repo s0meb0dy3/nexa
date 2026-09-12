@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from textual import work
@@ -15,9 +16,14 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, RichLog, Static
 from textual.worker import Worker
 
+from nexa_agent.events import MessageDeltaEvent
 from nexa_coding.session import CodingSession, CodingSessionConfig
 from nexa_coding.tui.adapter import TuiEventAdapter
 from nexa_coding.tui.state import ChatItemKind, TuiState
+
+# 流式刷新节流间隔（秒）：delta 来得很快，但界面没必要每个字都重画一次，
+# 否则全量重绘会退化成 O(n²) 并产生闪烁。MessageEnd 时会强制刷新收尾。
+_STREAM_REFRESH_INTERVAL = 0.04
 
 
 class NexaTuiApp(App):
@@ -69,6 +75,8 @@ class NexaTuiApp(App):
         self._adapter = TuiEventAdapter(self._state)
         # 当前正在运行的 worker，用于 Escape 取消。
         self._current_worker: Worker | None = None
+        # 上次流式刷新的时刻（单调时钟），用于节流。
+        self._last_refresh = 0.0
 
     def compose(self) -> ComposeResult:
         """搭建界面组件。"""
@@ -108,6 +116,21 @@ class NexaTuiApp(App):
 
         async for event in session.prompt(text):
             self._adapter.apply(event)
+            # 流式 delta 用节流刷新（字太快，没必要每个都重画）；
+            # 其他事件（尤其是收尾的 message_end）立即刷新。
+            if isinstance(event, MessageDeltaEvent):
+                self._refresh_throttled()
+            else:
+                self._refresh()
+
+    # ── 刷新 ─────────────────────────────────────────────────────────────
+
+    def _refresh_throttled(self) -> None:
+        """按固定间隔节流刷新，避免每个 token 都全量重绘。"""
+
+        now = time.monotonic()
+        if now - self._last_refresh >= _STREAM_REFRESH_INTERVAL:
+            self._last_refresh = now
             self._refresh()
 
     # ── 键盘动作 ─────────────────────────────────────────────────────────
@@ -151,6 +174,19 @@ class NexaTuiApp(App):
             else:
                 prefix = "⚠" if item.error else "🔧"
                 transcript.write(f"{prefix} {item.text}")
+
+        # 正在进行中的流式内容（尚未提交）：思考在前、正文在后。
+        if self._state.streaming_started:
+            if self._state.streaming_thinking:
+                if self._state.show_thinking:
+                    transcript.write(f"💭 {self._state.streaming_thinking}")
+                else:
+                    transcript.write(
+                        f"💭 思考中… {len(self._state.streaming_thinking)} 字（Ctrl+T 展开）"
+                    )
+            if self._state.streaming_text:
+                transcript.write(f"🤖 {self._state.streaming_text}")
+
         transcript.scroll_end()
 
         if self._state.error:

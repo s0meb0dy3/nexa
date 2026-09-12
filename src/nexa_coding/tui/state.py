@@ -45,8 +45,12 @@ class TuiState:
 
     # 全部聊天记录，按顺序渲染。
     chat_items: list[ChatItem] = field(default_factory=list)
-    # 当前正在流式输出的文本（Phase 12 不用，保留给将来真流式）。
+    # 当前正在流式输出的正文（尚未提交成 ChatItem）。
     streaming_text: str = ""
+    # 当前正在流式输出的思考（尚未提交成 ChatItem）。
+    streaming_thinking: str = ""
+    # 是否正处于"助手消息输出中"（MessageStart 之后、MessageEnd 之前）。
+    streaming_started: bool = False
     # agent 是否正在运行。
     running: bool = False
     # 最近一次错误，None 表示无错误。
@@ -62,20 +66,33 @@ class TuiState:
         self.chat_items.append(ChatItem(kind=ChatItemKind.user, text=text))
 
     def start_assistant(self) -> None:
-        """助手开始回复：清空流式缓冲，等待消息结束合并。"""
+        """助手开始回复：清空流式缓冲，进入输出中状态。"""
 
         self.streaming_text = ""
+        self.streaming_thinking = ""
+        self.streaming_started = True
 
     def append_assistant_delta(self, delta: str) -> None:
-        """追加一段流式文本（Phase 12 不调用，供将来真流式用）。"""
+        """追加一段正文流式文本。"""
 
         self.streaming_text += delta
 
+    def append_thinking_delta(self, delta: str) -> None:
+        """追加一段思考流式文本。"""
+
+        self.streaming_thinking += delta
+
     def end_assistant(self, text: str) -> None:
-        """助手回复结束：把整条消息合并进聊天记录。"""
+        """助手回复结束：提交整条消息，并重置流式状态。
+
+        text 为空（例如只调用工具、没有文字）时只重置状态，不产生记录。
+        """
 
         self.streaming_text = ""
-        self.chat_items.append(ChatItem(kind=ChatItemKind.assistant, text=text))
+        self.streaming_thinking = ""
+        self.streaming_started = False
+        if text:
+            self.chat_items.append(ChatItem(kind=ChatItemKind.assistant, text=text))
 
     def add_tool(self, name: str, status: str, *, error: bool = False) -> None:
         """记录一条工具执行消息。"""

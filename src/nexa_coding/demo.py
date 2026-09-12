@@ -8,7 +8,7 @@ import datetime
 from nexa_agent.events import (
     AgentEndEvent,
     AgentStartEvent,
-    MessageStartEvent,
+    MessageEndEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     TurnEndEvent,
@@ -94,8 +94,8 @@ async def main() -> None:
         elif isinstance(event, TurnStartEvent):
             print("\n🔄 ── 新一轮开始 ──")
 
-        elif isinstance(event, MessageStartEvent):
-            # 助手消息到达。
+        elif isinstance(event, MessageEndEvent):
+            # 助手消息完成（流式时 MessageStart 只表示开始，完整消息在这里）。
             text = event.message.text
             if text:
                 print(f"\n🤖 助手回复: {text}")
