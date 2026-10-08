@@ -1,8 +1,8 @@
 """系统提示词的构建：把身份、工具、技能、项目上下文拼成一段提示词。
 
 这是 Phase 10 的核心纯函数层：build_system_prompt 没有 IO、没有随机，
-同一组输入两次调用输出完全一致，因此可单测、可复用——print 模式和
-TUI 将来都调它。
+同一组输入两次调用输出完全一致，因此可单测、可复用；
+CodingSession 加载会话时用它构建提示词。
 """
 
 from __future__ import annotations

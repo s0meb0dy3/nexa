@@ -1,4 +1,7 @@
-"""OpenAI 兼容 API 的 Provider 实现。"""
+"""OpenAI 兼容 API 的 Provider 实现。
+初始化供应商的 name、api key、base_url，提供 stream_response 方法，
+将接口响应转换成 provider event 定义的事件。
+AsyncIterator： 异步迭代器，返回ProviderEvent类型的事件流"""
 
 from __future__ import annotations
 

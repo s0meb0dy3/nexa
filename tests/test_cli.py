@@ -1,93 +1,85 @@
-"""测试单次执行 prompt 的命令行入口。"""
+"""测试交互式入口的参数、配置解析和启动行为。"""
 
 from __future__ import annotations
 
-import argparse
-from io import StringIO
-
 import pytest
 
-from nexa_agent.messages import AssistantMessage, TextContent
-from nexa_agent.provider_events import ProviderErrorEvent, ProviderResponseEndEvent
 from nexa_ai.fake import FakeProvider
 from nexa_ai.openai_compatible import OpenAICompatibleProvider
-from nexa_coding.cli import build_provider, parse_args, resolve_provider, run_prompt
+from nexa_coding import cli
+from nexa_coding.cli import build_provider, parse_args, resolve_provider
 from nexa_coding.config import ConfigError, ProviderProfile
-from nexa_coding.rendering import PrintOutputMode
 
 
-def _args(tmp_path) -> argparse.Namespace:
-    return argparse.Namespace(
-        prompt="读取 README",
-        model="test-model",
-        provider=None,
-        cwd=tmp_path,
-        output=PrintOutputMode.text,
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_prompt_prints_final_answer_and_registers_coding_tools(tmp_path):
-    """CLI 应输出最终回答，并将四个本地工具交给 Provider。"""
-    provider = FakeProvider(
-        [
-            [
-                ProviderResponseEndEvent(
-                    message=AssistantMessage(content=[TextContent(text="总结完成")])
-                )
-            ]
-        ]
-    )
-    stdout, stderr = StringIO(), StringIO()
-
-    exit_code = await run_prompt(_args(tmp_path), provider=provider, stdout=stdout, stderr=stderr)
-
-    assert exit_code == 0
-    assert stdout.getvalue() == "总结完成\n"
-    assert stderr.getvalue() == ""
-    assert {tool.name for tool in provider.calls[0][3]} == {"read", "write", "edit", "bash"}
-
-
-@pytest.mark.asyncio
-async def test_run_prompt_returns_nonzero_for_provider_error(tmp_path):
-    """Provider 失败时 CLI 应在 stderr 报错并返回非零。"""
-    provider = FakeProvider([[ProviderErrorEvent(message="连接失败")]])
-    stdout, stderr = StringIO(), StringIO()
-
-    exit_code = await run_prompt(_args(tmp_path), provider=provider, stdout=stdout, stderr=stderr)
-
-    assert exit_code == 1
-    assert stdout.getvalue() == ""
-    assert "连接失败" in stderr.getvalue()
-
-
-@pytest.mark.asyncio
-async def test_run_prompt_reports_empty_provider_error(tmp_path):
-    """Provider 没有错误详情时，也应给脚本调用者留下可读诊断。"""
-    provider = FakeProvider([[ProviderErrorEvent(message="")]])
-    stdout, stderr = StringIO(), StringIO()
-
-    exit_code = await run_prompt(_args(tmp_path), provider=provider, stdout=stdout, stderr=stderr)
-
-    assert exit_code == 1
-    assert stdout.getvalue() == ""
-    assert "Provider 未提供错误详情" in stderr.getvalue()
-
-
-def test_parse_args_provider_and_model_default_none():
-    """--provider/--model 缺省为 None（由配置档案补上），-p 仍必填。"""
-    args = parse_args(["-p", "hi"])
+def test_parse_args_defaults_to_interactive(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    args = parse_args([])
 
     assert args.provider is None
     assert args.model is None
-    assert args.prompt == "hi"
+    assert args.cwd == tmp_path
 
 
-def test_parse_args_accepts_provider():
-    """--provider 被正确解析。"""
-    args = parse_args(["-p", "hi", "--provider", "ollama"])
+@pytest.mark.parametrize(
+    "option", [["-p", "hi"], ["--print", "hi"], ["--output", "json"], ["--tui"]]
+)
+def test_parse_args_rejects_removed_modes(option):
+    with pytest.raises(SystemExit) as error:
+        parse_args(option)
+    assert error.value.code == 2
 
-    assert args.provider == "ollama"
+
+@pytest.mark.parametrize("override", [None, "custom-model"])
+def test_main_starts_tui_with_selected_project_and_model(monkeypatch, tmp_path, override):
+    """验证入口会传递供应商、规范化目录和模型覆盖，并启动交互界面。"""
+    provider = FakeProvider([])
+    profile = ProviderProfile("ollama", "http://localhost/v1", "default-model", "key")
+    calls = []
+
+    def resolve(name):
+        assert name == "ollama"
+        return provider, profile
+
+    class App:
+        def __init__(self, selected_provider, *, model, cwd):
+            calls.append((selected_provider, model, cwd))
+
+        def run(self):
+            calls.append("started")
+
+    monkeypatch.setattr(cli, "resolve_provider", resolve)
+    monkeypatch.setattr(cli, "NexaTuiApp", App)
+    args = ["--provider", "ollama", "--cwd", str(tmp_path / ".." / tmp_path.name)]
+    if override:
+        args += ["--model", override]
+
+    cli.main(args)
+
+    assert calls == [(provider, override or profile.model, tmp_path), "started"]
+
+
+def test_main_rejects_invalid_project_before_loading_config(monkeypatch, tmp_path, capsys):
+    def resolve(name):
+        pytest.fail("无效目录不应继续加载配置或启动界面")
+
+    monkeypatch.setattr(cli, "resolve_provider", resolve)
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--cwd", str(tmp_path / "missing")])
+
+    assert error.value.code == 2
+    assert "--cwd 不是目录" in capsys.readouterr().err
+
+
+def test_main_reports_config_error(monkeypatch, capsys):
+    def resolve(name):
+        raise ConfigError("缺少供应商配置")
+
+    monkeypatch.setattr(cli, "resolve_provider", resolve)
+    with pytest.raises(SystemExit) as error:
+        cli.main([])
+
+    assert error.value.code == 2
+    assert "缺少供应商配置" in capsys.readouterr().err
 
 
 def test_build_provider_openai_compatible():

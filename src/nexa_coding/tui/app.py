@@ -29,7 +29,7 @@ _STREAM_REFRESH_INTERVAL = 0.04
 class NexaTuiApp(App):
     """最简交互式 coding agent 界面。
 
-    用法：uv run nexa --tui
+    用法：nexa（或在源码目录运行 uv run nexa）
     """
 
     # 键盘绑定：Escape 中断当前运行，Ctrl+T 展开/折叠思考。

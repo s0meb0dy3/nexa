@@ -1,6 +1,6 @@
 """AgentHarness：把 AgentLoop 包装成可持续对话的"agent brain"。
 
-上层不再直接操作 run_agent_loop() 和对话列表，而是通过 Harness 的接口：
+上层不再直接操作 AgentLoop.run() 和对话列表，而是通过 Harness 的接口：
 - prompt() 发送用户消息并等待回复
 - continue_() 基于当前历史继续运行
 - subscribe() 订阅事件流（用于日志、持久化、TUI）
@@ -233,7 +233,7 @@ class AgentHarness:
             loop = AgentLoop(self._config.provider, max_turns=self._config.max_turns)
 
             # 运行循环
-            async for event in loop.run_agent_loop(
+            async for event in loop.run(
                 model=self._config.model,
                 system=self._config.system,
                 messages=self._messages,

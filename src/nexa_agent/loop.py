@@ -37,28 +37,13 @@ class AgentLoop:
     4. 重复以上步骤，直到模型不再请求工具，或者达到最大轮次。
     """
 
-    def __init__(self, provider: ModelProvider, *, max_turns: int = 10) -> None:
+    def __init__(self, provider: ModelProvider, *, max_turns: int = 50) -> None:
         # provider 是具体的模型后端，例如 DeepSeek、OpenAI 等。
         self.provider = provider
         # max_turns 防止模型反复调用工具，陷入死循环。
         self.max_turns = max_turns
 
     async def run(
-        self,
-        *,
-        model: str,
-        system: str,
-        messages: list[AgentMessage],
-        tools: list[AgentTool],
-    ) -> AsyncIterator[AgentEvent]:
-        """运行 Agent 循环，逐步产出事件，让外部知道当前进行到哪一步。"""
-
-        async for event in self.run_agent_loop(
-            model=model, system=system, messages=messages, tools=tools
-        ):
-            yield event
-
-    async def run_agent_loop(
         self,
         *,
         model: str,
