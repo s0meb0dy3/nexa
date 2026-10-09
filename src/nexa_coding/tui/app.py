@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -97,6 +98,8 @@ class NexaTuiApp(App):
         event.input.value = ""
 
         # 记录用户消息，立即可见。
+        self._state.error = None
+        self._state.set_running(True)
         self._state.add_user(text)
         self._refresh()
 
@@ -110,18 +113,28 @@ class NexaTuiApp(App):
     async def _run_prompt(self, text: str) -> None:
         """在 worker 里跑一轮 CodingSession.prompt()，把事件翻译成状态。"""
 
-        session = CodingSession.load(
-            CodingSessionConfig(provider=self._provider, model=self._model, cwd=self._cwd)
-        )
+        try:
+            session = CodingSession.load(
+                CodingSessionConfig(provider=self._provider, model=self._model, cwd=self._cwd)
+            )
 
-        async for event in session.prompt(text):
-            self._adapter.apply(event)
-            # 流式 delta 用节流刷新（字太快，没必要每个都重画）；
-            # 其他事件（尤其是收尾的 message_end）立即刷新。
-            if isinstance(event, MessageDeltaEvent):
-                self._refresh_throttled()
-            else:
-                self._refresh()
+            async for event in session.prompt(text):
+                self._adapter.apply(event)
+                if isinstance(event, MessageDeltaEvent):
+                    self._refresh_throttled()
+                else:
+                    self._refresh()
+        except asyncio.CancelledError:
+            self._state.add_tool("运行", "已取消")
+            raise
+        except Exception as error:
+            self._state.error = f"{type(error).__name__}: {error}"
+            self._state.add_tool("运行", self._state.error, error=True)
+        finally:
+            self._state.set_running(False)
+            self._state.end_assistant("")
+            self._current_worker = None
+            self._refresh()
 
     # ── 刷新 ─────────────────────────────────────────────────────────────
 
@@ -138,10 +151,9 @@ class NexaTuiApp(App):
     def action_cancel(self) -> None:
         """Escape：取消当前运行。"""
 
-        if self._current_worker is not None:
+        if self._current_worker is not None and not self._current_worker.is_cancelled:
             self._current_worker.cancel()
-            self._state.set_running(False)
-            self._state.add_tool("运行", "已取消")
+            self._state.add_tool("运行", "正在取消")
             self._refresh()
 
     def action_toggle_thinking(self) -> None:

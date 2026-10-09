@@ -29,6 +29,8 @@ class AgentToolResult(WireModel):
     content: list[TextContent] = Field(default_factory=list)
     # 除文字以外的额外信息，可以是任意合法的 JSON 值。
     details: JSONValue = None
+    # 工具报告的失败状态，由 Loop 传递到事件和历史。
+    is_error: bool = False
 
     # 在 Pydantic 正式检查字段之前，先把输入格式统一整理好。
     @model_validator(mode="before")

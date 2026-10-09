@@ -126,6 +126,36 @@ _ADAPTER.validate_python(data)  # 反序列化
 ```
 
 
+## @classmethod — 类方法
+
+绑定在类上的方法，第一个参数 `cls` 代表调用它的类；实例方法的 `self` 则代表具体对象。常用于提供另一种创建对象的方式：先处理数据，再用 `cls(...)` 创建对象，自动调用 `__init__()`。
+
+```python
+class Person:
+    def __init__(self, name):
+        self.name = name
+
+    def introduce(self):  # 实例方法
+        return f"我是 {self.name}"
+
+    @classmethod
+    def from_text(cls, text):  # 类方法，无需先创建实例
+        return cls(text.strip())
+
+
+person = Person.from_text("  小明  ")  # cls 是 Person
+print(person.introduce())  # 我是 小明
+```
+
+`CodingSession.load(config)` 也是这个模式：准备好历史、工具等材料，再通过 `cls(...)` 创建会话。使用 `cls` 而不写死类名，还能让子类调用时创建子类对象。
+
 ## if isinstance
+
+`isinstance(对象, 类)` 判断对象是否是这个类或其子类的实例，返回 `True` / `False`。配合 `if`，可以按对象类型执行不同逻辑。
+
+```python
+if isinstance(event, MessageEndEvent):
+    message = event.message  # 只有消息结束事件才提取完整消息
+```
 
 ## 

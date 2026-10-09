@@ -15,6 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -81,7 +84,9 @@ def _make_success(text: str, **details: Any) -> AgentToolResult:
 
 def _make_error(message: str, **details: Any) -> AgentToolResult:
     """创建失败结果。"""
-    return AgentToolResult(content=f"错误：{message}", details=details if details else None)
+    return AgentToolResult(
+        content=f"错误：{message}", details=details if details else None, is_error=True
+    )
 
 
 # ── 工具实现 ──────────────────────────────────────────────────────────────────
@@ -343,7 +348,17 @@ def _create_bash_tool(cwd: Path) -> AgentTool:
                 cwd=str(cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=os.name == "posix",
             )
+
+            async def stop_process() -> None:
+                # POSIX 下连同 shell 子进程一起停止，避免取消后命令继续运行。
+                with contextlib.suppress(ProcessLookupError):
+                    if os.name == "posix":
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    else:
+                        proc.kill()
+                await proc.communicate()
 
             try:
                 stdout, stderr = await asyncio.wait_for(
@@ -352,11 +367,12 @@ def _create_bash_tool(cwd: Path) -> AgentTool:
                 )
                 timed_out = False
             except TimeoutError:
-                # 超时，杀掉进程
-                proc.kill()
-                await proc.wait()
+                await stop_process()
                 timed_out = True
                 stdout, stderr = b"", b""
+            except asyncio.CancelledError:
+                await stop_process()
+                raise
 
         except Exception as e:
             return _make_error(f"执行失败：{e}")

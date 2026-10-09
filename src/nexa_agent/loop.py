@@ -193,19 +193,25 @@ class AgentLoop:
 
         if tool is None:
             # 找不到工具时，返回一个错误结果，让模型知道情况。
-            result = AgentToolResult(content=[TextContent(text=f"未知工具: {tool_call.name}")])
-            is_error = True
+            result = AgentToolResult(
+                content=[TextContent(text=f"未知工具: {tool_call.name}")], is_error=True
+            )
         else:
             # 调用工具的真正执行函数。
-            result = await tool.execute(tool_call.id, tool_call.arguments)
-            is_error = False
+            try:
+                result = await tool.execute(tool_call.id, tool_call.arguments)
+            except Exception as error:
+                # CancelledError 不属于 Exception，取消仍然向上传播。
+                result = AgentToolResult(
+                    content=f"工具执行失败: {type(error).__name__}: {error}", is_error=True
+                )
 
         # 通知外部：工具执行完毕。
         yield ToolExecutionEndEvent(
             tool_call_id=tool_call.id,
             tool_name=tool_call.name,
             result=result,
-            is_error=is_error,
+            is_error=result.is_error,
         )
 
     @staticmethod

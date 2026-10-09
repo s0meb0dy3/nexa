@@ -348,3 +348,48 @@ async def test_loop_preserves_external_messages():
 
     # 验证：外部消息列表没有被修改
     assert len(external_messages) == original_len
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raises", [False, True])
+async def test_tool_failure_reaches_events_and_history(raises):
+    async def execute(call_id, arguments):
+        if raises:
+            raise OSError("工具故障")
+        return AgentToolResult(content="工具故障", is_error=True)
+
+    tool = AgentTool(name="broken", description="", parameters={}, execute_fn=execute)
+    provider = FakeProvider(
+        [
+            [
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(
+                        content=[ToolCall(id="failure", name="broken", arguments={})]
+                    )
+                )
+            ],
+            [ProviderResponseEndEvent(message=AssistantMessage(content="已处理失败"))],
+        ]
+    )
+    events = await _collect_events(AgentLoop(provider), tools=[tool])
+    tool_end = next(e for e in events if isinstance(e, ToolExecutionEndEvent))
+    assert tool_end.is_error
+    assert tool_end.result.is_error
+    assert "工具故障" in tool_end.result.text
+    assert events[-1].messages[2].is_error
+
+
+@pytest.mark.asyncio
+async def test_tool_cancellation_is_not_converted_to_failure():
+    import asyncio
+
+    async def execute(call_id, arguments):
+        raise asyncio.CancelledError
+
+    tool = AgentTool(name="cancel", description="", parameters={}, execute_fn=execute)
+    loop = AgentLoop(FakeProvider([]))
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in loop._execute_tool_call(
+            ToolCall(id="cancel", name="cancel", arguments={}), [tool]
+        ):
+            pass

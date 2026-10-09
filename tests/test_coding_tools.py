@@ -80,6 +80,7 @@ async def test_read_file_not_found(tmp_path):
     result = await _execute(read_tool, path="not_exist.txt")
     assert "错误" in result.text
     assert "不存在" in result.text
+    assert result.is_error
 
 
 @pytest.mark.asyncio
@@ -247,6 +248,7 @@ async def test_basic_success(tmp_path):
     result = await _execute(bash_tool, command="echo 'Hello'")
     assert "Hello" in result.text
     assert "退出码：0" in result.text
+    assert not result.is_error
 
 
 @pytest.mark.asyncio
@@ -267,6 +269,7 @@ async def test_non_zero_exit_code(tmp_path):
 
     result = await _execute(bash_tool, command="exit 42")
     assert "退出码：42" in result.text
+    assert result.is_error
     assert "错误" in result.text
 
 
@@ -295,3 +298,40 @@ async def test_timeout(tmp_path):
     result = await _execute(bash_tool, command="sleep 10", timeout=0.1)
     assert "超时" in result.text
     assert "错误" in result.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_bash_stops_child_processes(tmp_path, cancel):
+    import asyncio
+    import os
+
+    if os.name != "posix":
+        pytest.skip("进程组清理适用于 POSIX")
+    tool = _get_tool(create_coding_tools(tmp_path), "bash")
+    task = asyncio.create_task(
+        _execute(
+            tool,
+            command="(sleep 0.4; touch survived) & touch ready; wait",
+            timeout=5 if cancel else 0.1,
+        )
+    )
+    try:
+        async with asyncio.timeout(2):
+            while not (tmp_path / "ready").exists():
+                await asyncio.sleep(0.01)
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            result = await task
+            assert result.is_error
+            assert result.details["timed_out"]
+        await asyncio.sleep(0.5)
+        assert not (tmp_path / "survived").exists()
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
