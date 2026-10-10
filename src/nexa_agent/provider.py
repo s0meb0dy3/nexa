@@ -7,7 +7,7 @@ nexa_ai → nexa_agent。
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Literal, Protocol
 
 from nexa_agent.messages import AgentMessage
@@ -21,6 +21,10 @@ class ModelProvider(Protocol):
     """所有模型后端都要实现的最小接口。"""
 
     default_thinking: ThinkingLevel
+
+    def context_window(self, model: str) -> int | None:
+        """模型官方上下文上限；未知时返回 None。"""
+        ...
 
     def thinking_options(self, model: str) -> tuple[ThinkingLevel, ...]:
         """当前模型支持的设置；default 表示不指定 API 参数。"""
@@ -37,7 +41,7 @@ class ModelProvider(Protocol):
         system: str,
         messages: list[AgentMessage],
         tools: list[AgentTool],
-    ) -> AsyncIterator[ProviderEvent]:
+    ) -> AsyncGenerator[ProviderEvent, None]:
         """返回一次模型响应的异步事件流。"""
 
         ...

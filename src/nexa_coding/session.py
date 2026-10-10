@@ -3,19 +3,20 @@
 CodingSession 是"可续聊的 coding agent"入口：
 - 新建：读空账本 → 建 harness → 记 SessionInfoEntry + ModelChangeEntry
 - 恢复：读账本 → 重放 SessionState → 用恢复的消息建 harness
-- prompt / continue_：喂 harness 跑一轮，跑完后把新消息追加进账本
+- prompt / continue_：喂 harness 跑一轮，监听完整消息并立即追加进账本
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, Callable
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, cast
 
-from nexa_agent.events import AgentEvent
+from nexa_agent.events import AgentEndEvent, AgentEvent, MessageEndEvent
 from nexa_agent.harness import AgentHarness, AgentHarnessConfig
-from nexa_agent.messages import AgentMessage
+from nexa_agent.messages import AgentMessage, AssistantMessage, TokenUsage, ToolResultMessage
 from nexa_agent.provider import ModelProvider, ThinkingLevel
 from nexa_agent.session.entries import (
     Entry,
@@ -66,6 +67,7 @@ class CodingSessionConfig:
         cwd: 工具可访问的项目目录，也决定会话落盘位置和项目资源发现。
         skills: 已加载的技能列表，prompt 里可触发 /skill:name。
         resource_paths: 资源发现配置；为 None 时按 cwd 自动构造。
+        resolve_provider: 按账本中的供应商名字恢复配置，由应用提供。
     """
 
     provider: ModelProvider
@@ -77,6 +79,7 @@ class CodingSessionConfig:
     cwd: str | Path = Path.cwd()
     skills: list[Skill] = field(default_factory=list)
     resource_paths: NexaResourcePaths | None = None
+    resolve_provider: Callable[[str], ModelProvider] | None = None
 
 
 # ── 会话主类 ─────────────────────────────────────────────────────────────────
@@ -98,26 +101,26 @@ class CodingSession:
     def __init__(
         self,
         *,
+        config: CodingSessionConfig,
         provider: ModelProvider,
-        model: str,
-        system: str,
         storage: SessionStorage,
-        cwd: Path,
         harness: AgentHarness,
         entries: list[Entry],
+        active_leaf_id: str,
         skills: list[Skill] | None = None,
     ) -> None:
         """由 load() 内部调用，一般不要直接构造。"""
+        self._config = config
         self._provider = provider
         self._thinking: ThinkingLevel = "default"
         self.thinking_notice: str | None = None
-        self._model = model
-        self._system = system
         self._storage = storage
-        self._cwd = cwd
         self._harness = harness
-        # 账本当前全部条目（用于生成下一个 id 和找上一条）。
+        # 全部分支留在账本里，Harness 只持有当前分支的消息。
         self._entries = entries
+        self._active_leaf_id = active_leaf_id
+        self._save_failed = False
+        self._harness.subscribe(self)
         # 自增计数器，保证每个条目 id 唯一。
         self._id_counter = self._next_id_from_entries(self._entries)
         # 已加载的技能，prompt 里可触发 /skill:name。
@@ -143,11 +146,8 @@ class CodingSession:
         entries = storage.read_all()
         state = SessionState.from_entries(entries)
 
-        model = model_override or state.model or config.model
+        provider, model, thinking = cls._model_settings(config, state, model_override)
         requested = state.thinking if state.model else config.thinking
-        options = config.provider.thinking_options(model)
-        thinking = requested if requested in options else config.provider.default_thinking
-        provider = config.provider.with_thinking(model, thinking)
 
         # 空会话：先落一条会话信息 + 一条模型记录。
         if not entries:
@@ -155,8 +155,8 @@ class CodingSession:
             model_change = ModelChangeEntry(
                 id="model",
                 parent_id="info",
-                model=config.model,
-                provider=getattr(config.provider, "name", None),
+                model=model,
+                provider=getattr(provider, "name", None),
                 thinking=thinking,
             )
             storage.append(session_info)
@@ -181,18 +181,17 @@ class CodingSession:
                 model=model,
                 system=system,
                 tools=tools,
-            )
+            ),
+            messages=state.messages,
         )
-        harness.replace_messages(state.messages)
 
         session = cls(
+            config=config,
             provider=provider,
-            model=model,
-            system=system,
             storage=storage,
-            cwd=cwd,
             harness=harness,
             entries=entries,
+            active_leaf_id=state.active_leaf_id or entries[-1].id,
             skills=skills,
         )
         session._thinking = thinking
@@ -203,28 +202,101 @@ class CodingSession:
         )
         return session
 
+    @staticmethod
+    def _model_settings(
+        config: CodingSessionConfig, state: SessionState, model_override: str | None = None
+    ) -> tuple[ModelProvider, str, ThinkingLevel]:
+        provider = config.provider
+        if (
+            model_override is None
+            and state.provider
+            and state.provider != getattr(provider, "name", None)
+        ):
+            if config.resolve_provider is None:
+                raise ValueError(f"无法恢复供应商 {state.provider}，请提供 resolve_provider")
+            provider = config.resolve_provider(state.provider)
+        model = model_override or state.model or config.model
+        requested = state.thinking if state.model else config.thinking
+        thinking = (
+            requested
+            if requested in provider.thinking_options(model)
+            else provider.default_thinking
+        )
+        return provider.with_thinking(model, thinking), model, thinking
+
+    def _require_idle(self) -> None:
+        if self._harness.is_running:
+            raise RuntimeError("运行中不能修改会话，请先结束当前任务")
+        if self._save_failed:
+            raise RuntimeError("会话保存失败，请先解决存储问题，再用 /resume 重新加载会话")
+
+    @property
+    def active_leaf_id(self) -> str | None:
+        return self._active_leaf_id
+
+    @staticmethod
+    def _pending_tools(messages: tuple[AgentMessage, ...] | list[AgentMessage]) -> set[str]:
+        pending: set[str] = set()
+        for message in messages:
+            if isinstance(message, AssistantMessage):
+                pending.update(call.id for call in message.tool_calls)
+            elif isinstance(message, ToolResultMessage):
+                pending.discard(message.tool_call_id)
+        return pending
+
+    def branch_choices(self) -> list[tuple[str, str]]:
+        """显示所有分支上的安全消息节点；工具调用组中间不能继续对话。"""
+        # shortcut: 小会话逐节点回放；长会话选择变慢时再缓存路径状态。
+        choices = []
+        for entry in self._entries:
+            if isinstance(entry, MessageEntry):
+                state = SessionState.from_entries(self._entries, leaf_id=entry.id)
+                if not self._pending_tools(state.messages):
+                    preview = " ".join(entry.message.text.split())[:70] or "工具结果"
+                    indent = "  " * (len(state.messages) - 1)
+                    marker = " ← 当前" if entry.id == self._active_leaf_id else ""
+                    choices.append(
+                        (
+                            entry.id,
+                            f"{indent}• {entry.id} · {entry.message.role} · {preview}{marker}",
+                        )
+                    )
+        return choices
+
+    def branch_to_entry(self, entry_id: str) -> None:
+        """只改变当前路径，旧分支留在账本中；后续消息接在选中节点后。"""
+        self._require_idle()
+        if entry_id not in {key for key, _ in self.branch_choices()}:
+            raise ValueError("请选择完整消息节点；工具调用必须已有全部结果")
+        state = SessionState.from_entries(self._entries, leaf_id=entry_id)
+        provider, model, thinking = self._model_settings(self._config, state)
+        self._append_entry(
+            LeafEntry(id=self._new_id("leaf"), parent_id=entry_id, target_id=entry_id)
+        )
+        self._active_leaf_id = entry_id
+        self._harness.select_model(provider, model)
+        self._harness.replace_messages(state.messages)
+        self._provider, self._thinking = provider, thinking
+
     # ── 对外 API ─────────────────────────────────────────────────────────────
 
     def select_model(self, provider: ModelProvider, model: str, provider_name: str) -> bool:
         """账本写入成功之后，才发布新的运行配置。"""
-        if self._harness.is_running:
-            raise RuntimeError("运行中不能切换模型")
+        self._require_idle()
         options = provider.thinking_options(model)
         thinking = self.thinking if self.thinking in options else provider.default_thinking
         reset = thinking != self.thinking
         provider = provider.with_thinking(model, thinking)
         entry = ModelChangeEntry(
             id=self._new_id("model"),
-            parent_id=self._entries[-1].id if self._entries else None,
+            parent_id=self._active_leaf_id,
             model=model,
             provider=provider_name,
             thinking=thinking,
         )
-        self._storage.append(entry)
-        self._entries.append(entry)
+        self._append_entry(entry)
         self._harness.select_model(provider, model)
         self._provider = provider
-        self._model = model
         self._thinking = thinking
         return reset
 
@@ -241,19 +313,17 @@ class CodingSession:
         return self._provider.thinking_options(self.model)
 
     def set_thinking(self, level: str) -> None:
-        if self._harness.is_running:
-            raise RuntimeError("运行中不能修改思考设置")
+        self._require_idle()
         if level == self.thinking:
             return
         setting = cast(ThinkingLevel, level)
         candidate = self._provider.with_thinking(self.model, setting)
         entry = ThinkingChangeEntry(
             id=self._new_id("thinking"),
-            parent_id=self._entries[-1].id if self._entries else None,
+            parent_id=self._active_leaf_id,
             thinking=setting,
         )
-        self._storage.append(entry)
-        self._entries.append(entry)
+        self._append_entry(entry)
         self._harness.select_model(candidate, self.model)
         self._provider = candidate
         self._thinking = setting
@@ -264,74 +334,73 @@ class CodingSession:
         return self._harness.model
 
     @property
+    def latest_usage(self) -> TokenUsage | None:
+        """查找当前模型最近一次完整响应的实测值，恢复时复用消息账本。"""
+        return next(
+            (
+                message.usage
+                for message in reversed(self.messages)
+                if isinstance(message, AssistantMessage)
+                and message.usage is not None
+                and message.usage.model == self.model
+            ),
+            None,
+        )
+
+    @property
     def messages(self) -> tuple[AgentMessage, ...]:
         """当前会话历史（只读）。"""
         return self._harness.messages
 
-    async def prompt(self, text: str) -> AsyncIterator[AgentEvent]:
-        """发送用户消息，跑一轮，yield 事件；跑完后把新消息落盘。
-
-        支持技能命令：输入 /skill:name 参数 时，先展开成技能文本再喂给模型。
-
-        关键设计：持久化在 run 完成后做（非逐消息），避免和 harness
-        内存里的 transcript 双重保存。
-        """
-        # 命中技能命令就把输入替换成展开后的技能文本，否则用原文。
+    async def prompt(self, text: str) -> AsyncGenerator[AgentEvent, None]:
+        """展开技能后运行；完整消息由监听器保存，不依赖界面消费到结尾。"""
+        self._require_idle()
+        if self._pending_tools(self.messages):
+            raise ValueError("上次工具调用未完成，请用 /tree 回到完整的消息节点再继续")
         expanded = expand_skill_command(text, self.skills)
         resolved = expanded if expanded is not None else text
+        async with aclosing(self._harness.prompt(resolved)) as stream:
+            async for event in stream:
+                yield event
 
-        before = len(self._harness.messages)
-        async for event in self._harness.prompt(resolved):
-            yield event
-        # 跑完：把这一轮新增的消息追加成 MessageEntry，再记一条 LeafEntry。
-        self._persist_new_messages(before)
+    async def continue_(self) -> AsyncGenerator[AgentEvent, None]:
+        self._require_idle()
+        if self._pending_tools(self.messages):
+            raise ValueError("上次工具调用未完成，请用 /tree 回到完整的消息节点再继续")
+        async with aclosing(self._harness.continue_()) as stream:
+            async for event in stream:
+                yield event
 
-    async def continue_(self) -> AsyncIterator[AgentEvent]:
-        """不追加用户消息，从当前历史继续跑；跑完后同样落盘。"""
-        before = len(self._harness.messages)
-        async for event in self._harness.continue_():
-            yield event
-        self._persist_new_messages(before)
+    async def on_event(self, event: AgentEvent) -> None:
+        """Harness 在 yield 前等待这里：只存完整消息，不存流式片段。"""
+        if isinstance(event, MessageEndEvent):
+            self._append_entry(
+                MessageEntry(
+                    id=self._new_id("message"),
+                    parent_id=self._active_leaf_id,
+                    message=event.message,
+                )
+            )
+        elif isinstance(event, AgentEndEvent):
+            self._append_entry(
+                LeafEntry(
+                    id=self._new_id("leaf"),
+                    parent_id=self._active_leaf_id,
+                    target_id=self._active_leaf_id,
+                )
+            )
 
-    def handle_command(self, text: str) -> str | None:
-        """兼容旧调用者；交互命令由 TUI 执行，元数据只有一份。"""
-        from nexa_coding.commands import COMMANDS, parse_command
-
+    def _append_entry(self, entry: Entry) -> None:
+        # 保存失败后阻止继续写入，避免下一轮跳过未保存的消息。
         try:
-            command = parse_command(text)
-        except ValueError as error:
-            return str(error)
-        if command is None:
-            return None
-        name, _ = command
-        if name == "help":
-            return "\n".join(f"/{key} {value}" for key, value in COMMANDS.items())
-        if name == "exit":
-            return "退出"
-        return "请在交互界面执行此命令"
-
-    # ── 内部实现 ─────────────────────────────────────────────────────────────
-
-    def _persist_new_messages(self, before: int) -> None:
-        """把 harness 历史里 from 位置之后的新消息追加进账本。"""
-        new_messages = self._harness.messages[before:]
-        if not new_messages:
-            return
-
-        last_entry_id: str | None = self._entries[-1].id if self._entries else None
-        for message in new_messages:
-            entry_id = self._new_id("message")
-            entry = MessageEntry(id=entry_id, parent_id=last_entry_id, message=message)
             self._storage.append(entry)
-            self._entries.append(entry)
-            last_entry_id = entry_id
-
-        # 叶子指针指向最新一条消息。
-        leaf = LeafEntry(
-            id=self._new_id("leaf"), parent_id=last_entry_id, target_id=last_entry_id or ""
-        )
-        self._storage.append(leaf)
-        self._entries.append(leaf)
+        except Exception:
+            if isinstance(entry, MessageEntry):
+                self._save_failed = True
+            raise
+        self._entries.append(entry)
+        if not isinstance(entry, LeafEntry):
+            self._active_leaf_id = entry.id
 
     def _new_id(self, prefix: str) -> str:
         """生成一个唯一 id，如 message-1、leaf-2。"""

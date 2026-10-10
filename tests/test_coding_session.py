@@ -197,21 +197,6 @@ async def test_tool_results_persisted():
 
 
 @pytest.mark.asyncio
-async def test_handle_command():
-    """/help、/exit、未知命令。"""
-    storage = InMemorySessionStorage()
-    provider = FakeProvider([])
-    session = CodingSession.load(_make_config(storage, provider))
-
-    assert "/help" in (session.handle_command("/help") or "")
-    assert "退出" in (session.handle_command("/exit") or "")
-    unknown = session.handle_command("/bogus")
-    assert unknown is not None and "未知命令" in unknown
-    # 普通文本不是命令，返回 None。
-    assert session.handle_command("你好") is None
-
-
-@pytest.mark.asyncio
 async def test_prompt_writes_real_jsonl(tmp_path):
     """用真实 JsonlStorage 落盘：JSONL 文件存在且内容正确。"""
     storage = JsonlStorage(tmp_path / "session.jsonl")

@@ -9,8 +9,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from nexa_agent.messages import UserMessage
+from nexa_agent.provider import ModelProvider
 from nexa_agent.session.entries import MessageEntry
 from nexa_agent.session.storage import JsonlStorage
+from nexa_coding.config import load_config
+from nexa_coding.paths import NexaPaths
+from nexa_coding.providers import build_provider
 
 
 @dataclass(frozen=True)
@@ -22,8 +26,16 @@ class SessionSummary:
 
 
 class SessionManager:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, config_file: Path | None = None) -> None:
         self.directory = directory
+        self._config_file = config_file or NexaPaths().config_file
+
+    def resolve_provider(self, name: str) -> ModelProvider:
+        """恢复旧分支的供应商配置，TUI 不再解析消息账本。"""
+        config = load_config(self._config_file)
+        if name not in config.providers:
+            raise ValueError(f"会话使用的供应商 {name} 不在配置中")
+        return build_provider(config.providers[name])
 
     def path_for(self, session_id: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):

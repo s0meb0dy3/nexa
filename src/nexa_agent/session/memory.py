@@ -17,6 +17,7 @@ from nexa_agent.provider import ThinkingLevel
 from nexa_agent.session.entries import (
     Entry,
     LabelEntry,
+    LeafEntry,
     MessageEntry,
     ModelChangeEntry,
     ThinkingChangeEntry,
@@ -39,6 +40,7 @@ class SessionState:
     provider: str | None = None
     thinking: ThinkingLevel = "default"
     label: str | None = None
+    active_leaf_id: str | None = None
 
     @classmethod
     def from_entries(cls, entries: list[Entry], *, leaf_id: str | None = None) -> SessionState:
@@ -46,17 +48,21 @@ class SessionState:
 
         Args:
             entries: 账本里的全部条目。
-            leaf_id: 只回放"根到该叶子"路径上的条目；为 None 时回放全部。
+            leaf_id: 指定恢复节点；为 None 时恢复账本的当前分支。
 
         Returns:
             回放后的 SessionState。
         """
 
-        # 指定叶子时，先取出根到叶子的路径，只回放路径上的条目。
+        # 分支选择用 LeafEntry；普通追加直接以末条记录为当前节点。
+        # 旧账本里的 leaf 后若有模型设置，也按最新记录恢复。
+        if entries and leaf_id is None:
+            last = entries[-1]
+            leaf_id = last.target_id if isinstance(last, LeafEntry) else last.id
         if leaf_id is not None:
             entries = path_to_entry(entries, leaf_id)
 
-        state = cls()
+        state = cls(active_leaf_id=leaf_id)
         for entry in entries:
             if isinstance(entry, MessageEntry):
                 # 消息条目直接取出内嵌的 AgentMessage，原样追加。

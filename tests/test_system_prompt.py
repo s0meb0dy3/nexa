@@ -156,4 +156,4 @@ async def test_load_auto_builds_system():
     session = CodingSession.load(config)
 
     # 没给 system，自动构建的提示词含工具列表。
-    assert "可用工具：" in session._system  # 内部字段，仅测试用
+    assert "可用工具：" in session._harness._config.system  # 内部字段，仅测试用

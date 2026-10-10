@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, Iterable
 
 from nexa_agent.messages import AgentMessage
 from nexa_agent.provider import ThinkingLevel
@@ -20,6 +20,9 @@ class FakeProvider:
         self._streams = [list(stream) for stream in streams]
         self.calls: list[tuple[str, str, list[AgentMessage], list[AgentTool]]] = []
 
+    def context_window(self, model: str) -> int | None:
+        return None
+
     def thinking_options(self, model: str) -> tuple[ThinkingLevel, ...]:
         return ("default",)
 
@@ -35,13 +38,13 @@ class FakeProvider:
         system: str,
         messages: list[AgentMessage],
         tools: list[AgentTool],
-    ) -> AsyncIterator[ProviderEvent]:
+    ) -> AsyncGenerator[ProviderEvent, None]:
         """记录请求，并返回下一组预设事件。"""
 
         self.calls.append((model, system, list(messages), list(tools)))
         stream = self._streams.pop(0) if self._streams else []
 
-        async def iterator() -> AsyncIterator[ProviderEvent]:
+        async def iterator() -> AsyncGenerator[ProviderEvent, None]:
             for event in stream:
                 yield event
 

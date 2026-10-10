@@ -7,9 +7,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from time import monotonic
+
+from nexa_agent.messages import (
+    AgentMessage,
+    AssistantMessage,
+    TokenUsage,
+    ToolResultMessage,
+    UserMessage,
+)
 
 
 class ChatItemKind(StrEnum):
@@ -52,6 +61,7 @@ class TuiState:
 
     # 全部聊天记录，按顺序渲染。
     chat_items: list[ChatItem] = field(default_factory=list)
+    usage: TokenUsage | None = None
     # 当前正在流式输出的正文（尚未提交成 ChatItem）。
     streaming_text: str = ""
     # 当前正在流式输出的思考（尚未提交成 ChatItem）。
@@ -64,6 +74,32 @@ class TuiState:
     error: str | None = None
     # 是否展开显示思考内容；默认折叠（推理往往很长）。
     show_thinking: bool = False
+
+    @classmethod
+    def from_messages(cls, messages: Iterable[AgentMessage]) -> TuiState:
+        """从当前分支重建显示；历史工具没有可靠计时，单独标记。"""
+        state = cls()
+        for message in messages:
+            if isinstance(message, UserMessage):
+                state.add_user(message.text)
+            elif isinstance(message, AssistantMessage):
+                if message.thinking:
+                    state.add_thinking(message.thinking)
+                state.end_assistant(message.text)
+                for call in message.tool_calls:
+                    state.update_tool(call.id, call.name, "已中断", args=call.arguments)
+                    state.chat_items[-1].historical = True
+            elif isinstance(message, ToolResultMessage):
+                state.update_tool(
+                    message.tool_call_id,
+                    message.tool_name,
+                    "失败" if message.is_error else "结束",
+                    output=message.text,
+                    error=message.is_error,
+                )
+                item = next(i for i in state.chat_items if i.tool_call_id == message.tool_call_id)
+                item.historical = True
+        return state
 
     # ── 状态修改方法 ──────────────────────────────────────────────────────
 
@@ -132,12 +168,14 @@ class TuiState:
         item.error = error
         item.output = output
         if status in ("结束", "失败", "已中断"):
+            assert item.started_at is not None
             item.elapsed = monotonic() - item.started_at
 
     def interrupt_tools(self) -> None:
         for item in self.chat_items:
             if item.tool_call_id and item.elapsed is None:
                 item.status = "已中断"
+                assert item.started_at is not None
                 item.elapsed = monotonic() - item.started_at
 
     def add_thinking(self, text: str) -> None:

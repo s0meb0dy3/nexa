@@ -402,7 +402,7 @@ async def test_07_pull_vs_push():
     拉（async for）：调用方主动逐个取事件，适合写主流程逻辑。
     推（subscribe）：注册监听器，agent 每产生一个事件就推给它，
                      适合日志、持久化这类"旁路"功能。
-                     监听器抛异常也不会影响主流程（被 Harness 吞掉）。
+                     监听器抛异常会停止主流程，避免保存失败却继续运行。
     """
 
     provider = _provider_replying_text("我是助手")
@@ -433,17 +433,16 @@ async def test_07_pull_vs_push():
     unsubscribe()
     assert len(harness._listeners) == 0
 
-    # ── 监听器出错不影响主流程：Harness 会吞掉监听器的异常 ──
+    # ── 监听器失败必须传给调用方 ──
     class BrokenListener:
         def on_event(self, event: AgentEvent) -> None:
             raise RuntimeError("监听器坏了")
 
     harness2 = AgentHarness(config)
     harness2.subscribe(BrokenListener())  # 注册一个会炸的监听器
-    events2 = await _collect(harness2.prompt("你好"))
-
-    # 主流程照常完整跑完
-    assert isinstance(events2[-1], AgentEndEvent)
+    with pytest.raises(RuntimeError, match="监听器坏了"):
+        await _collect(harness2.prompt("你好"))
+    assert not harness2.is_running
 
 
 # ── 附：Harness 的取消机制也建立在事件检查点上 ────────────────────────────────
@@ -471,8 +470,8 @@ async def test_08_cancel_at_event_checkpoint():
             # 它本身已经送达，下一个事件 turn_start 会在检查点被拦下
             harness.cancel()
 
-    # 只处理了 agent_start 一个事件，后面的全部被拦下
-    assert seen == 1
+    # 用户消息先完成，随后 agent_start；后面的循环事件被拦下。
+    assert seen == 2
     assert harness.is_running is False
 
     print(f"取消后只处理了 {seen} 个事件")

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 
 from nexa_agent.events import (
     AgentEndEvent,
@@ -50,7 +51,7 @@ class AgentLoop:
         system: str,
         messages: list[AgentMessage],
         tools: list[AgentTool],
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """主循环：管理轮次，协调模型调用和工具执行。"""
 
         # 把用户传入的消息复制一份，避免修改外部列表。
@@ -66,17 +67,17 @@ class AgentLoop:
             # ── 1. 调用模型，翻译事件 ──────────────────────────────────────
             message: AssistantMessage | None = None
 
-            async for event in self._assistant_events(
-                model=model, system=system, history=history, tools=tools
-            ):
-                yield event
-                # 从 MessageEndEvent 中提取完整的助手消息。
-                if isinstance(event, MessageEndEvent):
-                    message = event.message
+            async with aclosing(
+                self._assistant_events(model=model, system=system, history=history, tools=tools)
+            ) as stream:
+                async for event in stream:
+                    yield event
+                    if isinstance(event, MessageEndEvent) and isinstance(
+                        event.message, AssistantMessage
+                    ):
+                        message = event.message
 
-            # 兜底：如果没拿到消息，用空消息。
-            if message is None:
-                message = AssistantMessage()
+            assert isinstance(message, AssistantMessage)
 
             # 把助手的回复加入历史，后续轮次能看到它。
             history.append(message)
@@ -92,25 +93,15 @@ class AgentLoop:
             for tool_call in message.tool_calls:
                 tool_result_msg: ToolResultMessage | None = None
 
-                async for event in self._execute_tool_call(tool_call, tools):
-                    yield event
-                    # 从 ToolExecutionEndEvent 中提取工具结果。
-                    if isinstance(event, ToolExecutionEndEvent):
-                        tool_result_msg = ToolResultMessage(
-                            tool_call_id=tool_call.id,
-                            tool_name=tool_call.name,
-                            content=event.result.content,
-                            is_error=event.is_error,
-                            details=event.result.details,
-                        )
+                async with aclosing(self._execute_tool_call(tool_call, tools)) as stream:
+                    async for event in stream:
+                        yield event
+                        if isinstance(event, MessageEndEvent) and isinstance(
+                            event.message, ToolResultMessage
+                        ):
+                            tool_result_msg = event.message
 
-                # 兜底：如果没拿到结果，用空结果。
-                if tool_result_msg is None:
-                    tool_result_msg = ToolResultMessage(
-                        tool_call_id=tool_call.id,
-                        tool_name=tool_call.name,
-                    )
-
+                assert isinstance(tool_result_msg, ToolResultMessage)
                 tool_results.append(tool_result_msg)
                 history.append(tool_result_msg)
 
@@ -127,7 +118,7 @@ class AgentLoop:
         system: str,
         history: list[AgentMessage],
         tools: list[AgentTool],
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """翻译层：把 Provider 的"模型语言"翻译成 Agent 的"消息生命周期语言"。
 
         Provider 事件（response_start, delta, response_end 等）
@@ -152,24 +143,25 @@ class AgentLoop:
         # 遍历 Provider 事件流：增量实时转发，完整消息与错误留到最后。
         final_message: AssistantMessage | None = None
 
-        async for event in stream:
-            if event.type == "delta":
-                # 正文 / 思考的增量片段，原样转成 Agent 层增量事件。
-                yield MessageDeltaEvent(kind=event.kind, delta=event.delta)
-            elif event.type == "response_end":
-                # 模型响应结束，携带完整的助手消息。
-                final_message = event.message
-            elif event.type == "error":
-                # 模型报错时，构造一个包含错误信息的助手消息。
-                final_message = AssistantMessage(
-                    content=[
-                        TextContent(text=f"错误: {event.message or 'Provider 未提供错误详情'}")
-                    ]
-                )
+        # 提前关闭上层事件流时，也立即关闭底层 HTTP 流。
+        async with aclosing(stream):
+            async for event in stream:
+                if event.type == "delta":
+                    # 正文 / 思考的增量片段，原样转成 Agent 层增量事件。
+                    yield MessageDeltaEvent(kind=event.kind, delta=event.delta)
+                elif event.type == "response_end":
+                    # 模型响应结束，携带完整的助手消息。
+                    final_message = event.message
+                elif event.type == "error":
+                    # 模型报错时，构造一个包含错误信息的助手消息。
+                    final_message = AssistantMessage(
+                        content=[
+                            TextContent(text=f"错误: {event.message or 'Provider 未提供错误详情'}")
+                        ]
+                    )
 
-        # 兜底：如果没拿到消息，用空消息。
         if final_message is None:
-            final_message = AssistantMessage()
+            raise RuntimeError("模型响应没有完整的结束消息")
 
         # 产出完整消息，收尾。
         yield MessageEndEvent(message=final_message)
@@ -178,7 +170,7 @@ class AgentLoop:
         self,
         tool_call: ToolCall,
         tools: list[AgentTool],
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """执行单个工具调用，产出工具相关事件。"""
 
         # 通知外部：开始执行某个工具。
@@ -203,8 +195,20 @@ class AgentLoop:
             except Exception as error:
                 # CancelledError 不属于 Exception，取消仍然向上传播。
                 result = AgentToolResult(
-                    content=f"工具执行失败: {type(error).__name__}: {error}", is_error=True
+                    content=[TextContent(text=f"工具执行失败: {type(error).__name__}: {error}")],
+                    is_error=True,
                 )
+
+        # 工具结果先成为完整消息，Harness 保存后才向界面报告执行结束。
+        yield MessageEndEvent(
+            message=ToolResultMessage(
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+                content=result.content,
+                is_error=result.is_error,
+                details=result.details,
+            )
+        )
 
         # 通知外部：工具执行完毕。
         yield ToolExecutionEndEvent(

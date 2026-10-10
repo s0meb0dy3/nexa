@@ -106,12 +106,12 @@ class SessionInfoEntry(BaseEntry):
 class LeafEntry(BaseEntry):
     """指向"当前会话最新消息"的指针。
 
-    每次 prompt/continue 跑完后追加一条，target_id 指向最新的 MessageEntry。
-    下次需要恢复时，直接读这条指针就知道从哪里续，不用沿树走到底。
+    正常运行结束或切换分支时追加，target_id 指向当前路径末端。
+    消息逐条保存；中途取消时，最后一条普通记录就是当前节点。
     """
 
     type: Literal["leaf"] = "leaf"
-    # 指向最新一条消息条目的 id。
+    # 指向当前路径末端的条目 id。
     target_id: str
 
 

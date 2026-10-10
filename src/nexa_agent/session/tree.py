@@ -36,8 +36,12 @@ def path_to_entry(entries: list[Entry], leaf_id: str) -> list[Entry]:
 
     # 从叶子开始，沿 parent_id 一路向上收集；根条目的 parent_id 是 None。
     path: list[Entry] = []
+    seen: set[str] = set()
     current_id: str | None = leaf_id
     while current_id is not None:
+        if current_id in seen:
+            raise TreeError(f"条目 {current_id!r} 的父节点形成循环")
+        seen.add(current_id)
         node = by_id.get(current_id)
         if node is None:
             # 某条记录的 parent_id 指向了一个不存在的节点，树断了。

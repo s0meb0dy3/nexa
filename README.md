@@ -52,8 +52,7 @@ bar shows the working directory, Git branch, provider, and active model.
   it is sent only when you press Enter after the task finishes.
 - Click a tool heading, or focus it and press Enter, to expand its output.
   Failures expand automatically.
-- Scroll up to read without following new output; Ctrl+End or the bottom button
-  returns to the latest messages.
+- Scroll up to read without following new output; Ctrl+End returns to the latest messages.
 - Escape cancels; Ctrl+T shows thinking; Ctrl+Q quits.
 
 ## Interactive commands
@@ -65,10 +64,12 @@ Enter executes the text in the input box.
 | --- | --- |
 | `/help` | Show commands and shortcuts. |
 | `/new` | Start a separate session, keeping the current model and old transcript. |
+| `/tree` | Choose a completed history node and continue on a branch; `/tree ID` selects it directly. Existing branches are preserved. |
 | `/resume` | Search sessions for this project; `/resume ID` opens one directly. |
+| `/usage` | Show API-measured context usage, the model limit, and percentage. |
 | `/thinking` | Show model thinking settings; `/thinking LEVEL` changes them. DeepSeek offers `off/low/high/max` and defaults to `high`. |
 | `/model` | Choose a configured provider/model; `/model PROFILE` selects a profile directly. |
-| `/exit` | Cancel an active task, wait for cleanup, then exit. |
+| `/quit` | Cancel an active task, wait for cleanup, then exit. |
 
 Session/model changes require an idle agent. Escape closes a selection window.
 The last selected session is restored on restart, with its recorded provider and
@@ -89,3 +90,15 @@ uv run mypy src
 ```
 
 Thinking settings are saved with the session and inherited by `/new`. Changes require an idle agent. Ctrl+T only expands/hides reasoning text. DeepSeek supports `deepseek-flash` and `deepseek-v4-pro`, with `off/low/high/max` (default: `high`). Other providers currently expose only `default`. Unsupported settings are rejected; switching to an incompatible model resets to the new provider’s default with a notice.
+
+Context usage uses the latest completed API response's `total_tokens` (input history plus output), not the sum of requests. Usage is saved with assistant messages and restored with the session. Missing usage displays `—`; unknown model limits have no percentage. This snapshot excludes content added after the measured request. `/usage` shows the definition and exact token counts. No token estimation or compression is performed.
+
+Completed user, assistant, and tool messages are saved by a Harness listener before
+being yielded to the UI. Cancelling a run preserves messages already completed.
+A message write failure stops the run and requires reloading the saved session.
+
+Sessions are append-only trees. Restart restores the active root-to-node path,
+including its model and thinking settings. `/tree` lists safe message nodes across
+all branches; nodes with unfinished tool calls cannot be selected. If a run was
+cancelled during a tool call, return to a safe node with `/tree` before continuing.
+Branching changes conversation history only; it does not undo files or commands.

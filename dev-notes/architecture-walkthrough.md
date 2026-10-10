@@ -1,7 +1,7 @@
 # NEXA 架构走读
 
 > 按一次交互请求的生命周期读代码，不按目录顺序读。
-> 更新：2026-10-08，统一为交互模式，已支持正文与思考的流式输出。
+> 更新：2026-10-10，完整消息由监听器逐条保存，会话树恢复当前分支。
 
 ## 一、总览：三次翻译的流水线
 
@@ -25,13 +25,15 @@ sequenceDiagram
         API-->>P: response_start / tool_call / response_end
         P-->>L: ProviderEvent 流（① 模型语言）
         L-->>H: AgentEvent 流（② 生命周期）
-        H-->>CS: 转发（推给订阅者 + yield）
+        H->>H: MessageEnd 时更新当前历史
+        H->>CS: await on_event(event)：完整消息落盘
+        H-->>CS: yield 事件
         CS-->>U: 渲染成界面更新（③ 人的语言）
         Note over L,P: 有 tool_call：执行工具→结果入 history→再来一轮
     end
     L-->>H: AgentEndEvent(messages=history)
-    H-->>CS: 事件 + 历史回收
-    CS->>CS: _persist_new_messages() 落盘账本
+    H->>CS: on_event：记录当前叶子
+    H-->>CS: yield AgentEndEvent
 ```
 
 整个项目只做一件事：**把用户的一句话变成 agent 的多轮行动，再把过程呈现出来**。
@@ -118,14 +120,11 @@ flowchart TD
   4. 加载技能 → `session.py` 拼 system prompt（**技能必须先进 prompt，顺序不能反**）
   5. 建 harness → 塞回恢复的历史
 
-- `session.py` `prompt()` — async generator：
-  1. 记住 `before = len(messages)`
-  2. `async for event in harness.prompt(text): yield event`（转发事件流）
-  3. `session.py` 跑完后 `_persist_new_messages(before)` — **持久化在 run 完成后，
-     不逐消息**（避免与 harness 内存 transcript 双重保存）
-
-- `session.py` `_persist_new_messages()` — 把 `before` 之后的新消息逐条 `append`
-  成 `MessageEntry`（用 `parent_id` 串成链），最后追加 `LeafEntry` 指向最新消息。
+- `session.py` `prompt()` — 展开技能，检查工具历史完整性，然后转发 Harness 事件。
+- `session.py` `on_event()` — Session 本身是监听器；每条 `MessageEndEvent`
+  立即保存为 `MessageEntry`，`parent_id` 指向当前分支末端。
+- `session.py` `branch_to_entry()` — 写入叶子选择记录，恢复该路径的消息、模型和思考设置。
+  旧分支不删除；工具调用未收齐结果的节点不允许继续。
 
 ## 四、循环：AgentLoop 是核心中的核心
 
@@ -169,24 +168,21 @@ flowchart TD
 
 `src/nexa_agent/harness.py`
 
-- `harness.py` `prompt()` / `harness.py` `continue_()` — 防并发、加用户消息（continue 不加）
-- `harness.py` `_run_loop()` — 转发事件时做三件事：
-  1. 检查取消标志（`cancel()` 设置，下一个事件检查点生效）
-  2. 推送给所有订阅者（`harness.py` `subscribe()`，监听器异常被吞不影响主流程）
-  3. `yield` 给调用方（拉通道）
-- 从 `AgentEndEvent` 里回收完整历史更新 `self._messages`
+- `prompt()` 添加用户消息；`continue_()` 不加用户消息。
+- `_notify()` 收到完整消息后，先更新历史，再按订阅顺序等待监听器。
+- `_run_loop()` 在监听器完成后才 `yield` 给界面；监听器异常向上传递。
+- 取消或关闭事件流仍会结束运行状态，已保存的完整消息保留。
 
 ```mermaid
 flowchart LR
-    LP["AgentLoop"] -->|"事件流"| RL["harness._run_loop"]
-    RL -->|"① 取消检查"| CK{"cancel_requested?"}
-    CK -- "是" --> STOP["break 安全退出"]
-    CK -- "否" --> SUB["② 推：subscribe 的监听器<br/>（异常被吞，不影响主流程）"]
-    SUB --> RECYCLE["③ 回收：AgentEndEvent → 更新历史"]
-    RECYCLE --> YIELD["④ yield 给调用方（拉通道）"]
-    YIELD --> CONS["消费者：<br/>TUI 或 tests"]
+    LP["AgentLoop"] --> H["Harness：更新完整消息历史"]
+    H --> S["await Session 监听器：保存完整消息"]
+    S --> Y["yield 事件"]
+    Y --> A["TUI Adapter"]
+    A --> ST["TuiState"]
+    ST --> UI["Textual 组件"]
 ```
-同一条事件流，推（subscribe 旁路）和拉（async for）两条通道各走各的。
+监听器负责内部保存，迭代器负责实时展示；两者遵循明确的先后顺序。
 
 ## 六、Provider 实现：SSE 流怎么变成事件
 
@@ -231,30 +227,32 @@ flowchart LR
 
 `src/nexa_agent/session/`（在核心层，因为"会话"是可移植概念）
 
-- `entries.py` — 5 种条目，`entries.py` `type Entry` 判别联合（`type` 字段）：
+- `entries.py` — 6 种条目，`entries.py` `type Entry` 判别联合（`type` 字段）：
   `SessionInfoEntry`（:83）/ `ModelChangeEntry`（:55，只记新状态）/
-  `MessageEntry`（:39，**内嵌完整 AgentMessage**）/ `LabelEntry`（:72）/ `LeafEntry`（:97，指针）
+  `MessageEntry`（**内嵌完整 AgentMessage**）/ `ThinkingChangeEntry` / `LabelEntry` / `LeafEntry`（当前节点指针）
 - `jsonl.py` — `entry_to_line`（`exclude_none=True`）/ `entry_from_line`
   （未知 type 返回 None 容忍；坏 JSON 抛带行号的 `JsonlLineError`）。
   序列化用 `TypeAdapter(Entry)`（PEP 695 别名不能直接调 model_validate）
 - `storage.py` `append()` — 永远追加模式，绝不改写；`storage.py` `read_all()` 缺文件返回 []
-- `tree.py` — `path_to_entry`：沿 `parent_id` 走回根再反转（为将来分支预留）
-- `memory.py` `from_entries()` — 回放：消息入列、model/label 覆盖；
+- `tree.py` — `path_to_entry`：沿 `parent_id` 走回根再反转（用于实际分支恢复）
+- `memory.py` `from_entries()` — 回放当前分支：消息入列、model/thinking/label 覆盖；
   传 `leaf_id` 只回放根到叶路径
 
 账本的单链结构（一次真实会话的头部）：
 
 ```mermaid
 flowchart LR
-    INFO["info<br/>session_info<br/>(cwd)"] --> MODEL["model<br/>model_change<br/>(deepseek-chat)"]
+    INFO["info<br/>session_info<br/>(cwd)"] --> MODEL["model<br/>model_change<br/>(deepseek-flash)"]
     MODEL --> M1["message-1<br/>user: '你好'"]
     M1 --> M2["message-2<br/>assistant"]
     M2 --> L1["leaf-1<br/>指针→message-2"]
-    L1 --> M3["message-3<br/>user: ..."]
+    M2 --> M3["message-3<br/>user: 原分支"]
+    M2 --> M4["message-4<br/>user: 新分支"]
     M3 --> ELL["..."]
 ```
-`leaf` 每轮对话追加一条，指向最新消息——恢复会话时直接找最后的 leaf，
-不用从根走到底；`parent_id` 串链则为将来的分支预留了树结构。
+`leaf` 在正常运行结束或选中历史节点时追加。末条若是 leaf，就恢复其 target；
+末条若是消息或设置，直接以它为当前节点。这也能恢复取消时尚未写入 leaf 的完整消息。
+沿 parent_id 回到根，只回放这条路径，其他分支不会混进当前上下文。
 
 ## 九、资源与路径：四级优先级发现
 

@@ -217,7 +217,8 @@ async def test_listener_receives_events():
 
     # 验证监听器收到了事件
     assert len(listener.events) > 0
-    assert isinstance(listener.events[0], AgentStartEvent)
+    assert listener.events[0].message.role == "user"
+    assert isinstance(listener.events[1], AgentStartEvent)
     assert isinstance(listener.events[-1], AgentEndEvent)
 
 

@@ -22,6 +22,8 @@ def test_command_parsing():
     assert parse_command("/skill:review file") is None
     assert parse_command("/tmp/example.py 看看这个文件") is None
     assert parse_command("ordinary") is None
+    assert parse_command("/quit") == ("quit", "")
+    assert parse_command("/exit") == ("quit", "")
     with pytest.raises(ValueError, match="未知命令"):
         parse_command("/unknown")
     with pytest.raises(ValueError, match="不接受参数"):
@@ -61,6 +63,9 @@ api_key = "unused"
 """)
     a, b = provider("a"), provider("b")
     monkeypatch.setattr("nexa_coding.tui.app.build_provider", lambda p: {"a": a, "b": b}[p.name])
+    monkeypatch.setattr(
+        "nexa_coding.session_manager.build_provider", lambda p: {"a": a, "b": b}[p.name]
+    )
     app = NexaTuiApp(a, model="model-a", cwd=tmp_path, paths=paths)
     async with app.run_test(size=(100, 32)) as pilot:
         await submit(app, pilot, "/help")
@@ -170,6 +175,7 @@ async def test_exit_waits_for_cleanup_and_blocks_switching(tmp_path, monkeypatch
     class Session:
         provider = FakeProvider([])
         thinking = "default"
+        latest_usage = None
         model = "test"
 
         async def prompt(self, text):
@@ -195,7 +201,7 @@ async def test_exit_waits_for_cleanup_and_blocks_switching(tmp_path, monkeypatch
         assert app._session_path == old
         assert "等待" in app._state.chat_items[-1].text
         running = app._current_worker
-        await submit(app, pilot, "/exit")
+        await submit(app, pilot, "/quit")
         await asyncio.wait_for(cleaning.wait(), 2)
         assert not exited
         finish.set()
@@ -203,3 +209,33 @@ async def test_exit_waits_for_cleanup_and_blocks_switching(tmp_path, monkeypatch
             await running.wait()
         await pilot.pause()
         assert exited == [True]
+
+
+@pytest.mark.asyncio
+async def test_tree_picker_switches_branch_and_restores_after_restart(tmp_path):
+    paths = NexaPaths(home=tmp_path / "home")
+    fake = provider("a")
+    app = NexaTuiApp(fake, model="model-a", cwd=tmp_path, paths=paths)
+    async with app.run_test(size=(120, 32)) as pilot:
+        await submit(app, pilot, "first")
+        first_tip = app._session.active_leaf_id
+        await submit(app, pilot, "old branch")
+        old_tip = app._session.active_leaf_id
+        await submit(app, pilot, "/tree")
+        assert isinstance(app.screen, ChoiceScreen)
+        app.screen.query_one(Input).value = first_tip
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app._session.active_leaf_id == first_tip
+        assert not any(item.text == "old branch" for item in app._state.chat_items)
+        await submit(app, pilot, "new branch")
+        assert [m.text for m in app._session.messages] == ["first", "完成", "new branch", "完成"]
+        await submit(app, pilot, f"/tree {old_tip}")
+        assert [m.text for m in app._session.messages] == ["first", "完成", "old branch", "完成"]
+    restarted = NexaTuiApp(fake, model="model-a", cwd=tmp_path, paths=paths)
+    async with restarted.run_test() as pilot:
+        await pilot.pause()
+        assert restarted._session.active_leaf_id == old_tip
+        assert any(item.text == "old branch" for item in restarted._state.chat_items)
+        assert not any(item.text == "new branch" for item in restarted._state.chat_items)

@@ -18,6 +18,7 @@ async def test_worker_failure_resets_ui(tmp_path, monkeypatch, load_fails):
     class BrokenSession:
         provider = FakeProvider([])
         thinking = "default"
+        latest_usage = None
 
         async def prompt(self, text):
             yield AgentStartEvent()
@@ -52,6 +53,7 @@ async def test_worker_cancellation_waits_for_cleanup(tmp_path, monkeypatch):
     class SlowSession:
         provider = FakeProvider([])
         thinking = "default"
+        latest_usage = None
 
         async def prompt(self, text):
             yield AgentStartEvent()
@@ -94,6 +96,7 @@ async def test_multiline_input_preserves_draft_while_running(tmp_path, monkeypat
     class Session:
         provider = FakeProvider([])
         thinking = "default"
+        latest_usage = None
         model = "restored-model"
 
         async def prompt(self, text):
@@ -153,7 +156,7 @@ async def test_incremental_messages_tools_and_scroll(tmp_path):
         app._refresh()
         await pilot.pause()
         assert transcript.scroll_y == 0
-        assert app.query_one("#jump-bottom").display
+        assert not app.query("#jump-bottom")
         app._state.end_assistant("# 完整回复\n\n- 完成")
         app._state.update_tool("c1", "read", "执行中", args={"path": "README.md"})
         app._refresh()
@@ -180,6 +183,8 @@ async def test_incremental_messages_tools_and_scroll(tmp_path):
         assert transcript.is_vertical_scroll_end
         await pilot.resize_terminal(45, 18)
         assert app.query_one("#environment").size.height == 1
+        assert app.query_one("#input-meta").size.height == 1
+        assert app.query_one("#environment").region.y == app.query_one("#context-usage").region.y
 
 
 @pytest.mark.asyncio
@@ -211,3 +216,31 @@ async def test_clicking_streaming_code_during_updates(tmp_path):
         assert "complete" in completed.source
         assert not app.query_one("#stream-answer", Static).display
         await pilot.click(completed.query_one("#code-content"))
+
+
+@pytest.mark.asyncio
+async def test_status_only_shows_active_work(tmp_path):
+    from textual.widgets import Button, Footer, Static
+
+    app = NexaTuiApp(FakeProvider([]), model="test", cwd=tmp_path)
+    async with app.run_test() as pilot:
+        status = app.query_one("#status", Static)
+        assert not app.query(Footer)
+        assert not app.query(Button)
+        assert not status.display
+        app._state.set_running(True)
+        app._refresh()
+        assert "正在连接模型" in str(status.render())
+        app._state.start_assistant()
+        app._state.append_thinking_delta("思考")
+        app._refresh()
+        assert "正在思考" in str(status.render())
+        app._state.append_assistant_delta("回答")
+        app._refresh()
+        assert "正在回答" in str(status.render())
+        app._state.set_running(False)
+        app._refresh()
+        assert not status.display
+        before = app._state.show_thinking
+        await pilot.press("ctrl+t")
+        assert app._state.show_thinking != before

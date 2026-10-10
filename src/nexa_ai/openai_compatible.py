@@ -1,13 +1,13 @@
 """OpenAI 兼容 API 的 Provider 实现。
 初始化供应商的 name、api key、base_url，提供 stream_response 方法，
 将接口响应转换成 provider event 定义的事件。
-AsyncIterator： 异步迭代器，返回ProviderEvent类型的事件流"""
+AsyncGenerator： 异步迭代器，返回ProviderEvent类型的事件流"""
 
 from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Self
 
 import httpx
@@ -17,6 +17,7 @@ from nexa_agent.messages import (
     AssistantMessage,
     TextContent,
     ThinkingContent,
+    TokenUsage,
     ToolCall,
     ToolResultMessage,
     UserMessage,
@@ -63,6 +64,9 @@ class OpenAICompatibleProvider:
         # base_url 是 API 的基础地址，不带末尾斜杠。
         self.base_url = base_url.rstrip("/")
 
+    def context_window(self, model: str) -> int | None:
+        return None
+
     def thinking_options(self, model: str) -> tuple[ThinkingLevel, ...]:
         return ("default",)
 
@@ -87,7 +91,7 @@ class OpenAICompatibleProvider:
         system: str,
         messages: list[AgentMessage],
         tools: list[AgentTool],
-    ) -> AsyncIterator[ProviderEvent]:
+    ) -> AsyncGenerator[ProviderEvent, None]:
         """向 OpenAI 兼容 API 发起一次流式请求，返回 ProviderEvent 异步迭代器。"""
 
         return self._stream(model=model, system=system, messages=messages, tools=tools)
@@ -99,7 +103,7 @@ class OpenAICompatibleProvider:
         system: str,
         messages: list[AgentMessage],
         tools: list[AgentTool],
-    ) -> AsyncIterator[ProviderEvent]:
+    ) -> AsyncGenerator[ProviderEvent, None]:
         """内部方法：真正执行 HTTP 流式请求。"""
 
         # 构造请求头，带上 API Key 和流式标识。
@@ -115,6 +119,7 @@ class OpenAICompatibleProvider:
             "model": model,
             "messages": api_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
         payload.update(self._thinking_parameters(model))
@@ -146,6 +151,8 @@ class OpenAICompatibleProvider:
                     # 逐步累积助手消息的内容。
                     content_blocks: list[TextContent | ThinkingContent | ToolCall] = []
                     text_buffer = ""
+                    usage = None
+                    finish_reason = None
                     # 推理内容单独累积（DeepSeek 的 reasoning_content / Ollama 的 reasoning）。
                     reasoning_buffer = ""
                     # 用字典暂存工具调用的各个部分，key 是工具在列表中的索引。
@@ -161,9 +168,20 @@ class OpenAICompatibleProvider:
                         if event == "[DONE]":
                             break
 
+                        # 统计块可能只有 usage、choices=[]，必须先读取统计。
+                        if event.get("usage") is not None:
+                            raw = event["usage"]
+                            usage = TokenUsage(
+                                model=model,
+                                input_tokens=raw["prompt_tokens"],
+                                output_tokens=raw["completion_tokens"],
+                                total_tokens=raw["total_tokens"],
+                            )
                         choices = event.get("choices")
                         if not choices:
                             continue
+                        if choices[0].get("finish_reason") is not None:
+                            finish_reason = choices[0]["finish_reason"]
                         delta = choices[0].get("delta")
                         if not delta:
                             continue
@@ -225,10 +243,7 @@ class OpenAICompatibleProvider:
                         )
 
                     # 构造完整的助手消息，通知外部响应结束。
-                    message = AssistantMessage(content=content_blocks)
-                    finish_reason = None
-                    if choices:
-                        finish_reason = choices[0].get("finish_reason")
+                    message = AssistantMessage(content=content_blocks, usage=usage)
                     yield ProviderResponseEndEvent(
                         message=message,
                         finish_reason=finish_reason,

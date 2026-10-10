@@ -17,7 +17,7 @@ from nexa_agent.events import (
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
 )
-from nexa_agent.messages import AssistantMessage
+from nexa_agent.messages import AssistantMessage, ToolResultMessage
 from nexa_coding.tui.state import TuiState
 
 
@@ -29,20 +29,7 @@ class TuiEventAdapter:
         self._state = state
 
     def apply(self, event: AgentEvent) -> None:
-        """处理一个事件，更新状态。
-
-        单个事件处理失败不应拖垮整个 UI——异常记录到 state.error。
-        """
-
-        try:
-            self._apply_one(event)
-        except Exception as error:  # noqa: BLE001 - 渲染层容错，不让单个事件搞挂界面
-            self._state.error = f"事件处理失败: {error}"
-
-    # ── 内部实现 ──────────────────────────────────────────────────────────
-
-    def _apply_one(self, event: AgentEvent) -> None:
-        """按事件类型分派到 TuiState 的方法。"""
+        """只转换显示状态；异常交给 app 的运行边界报告。"""
 
         if isinstance(event, AgentStartEvent):
             self._state.set_running(True)
@@ -64,10 +51,20 @@ class TuiEventAdapter:
             # 完整消息到达：以它为准提交思考与正文，并重置流式状态。
             message = event.message
             if isinstance(message, AssistantMessage):
+                if message.usage is not None:
+                    self._state.usage = message.usage
                 # 先记思考（推理发生在正文之前），再记正文。
                 if message.thinking:
                     self._state.add_thinking(message.thinking)
                 self._state.end_assistant(message.text)
+            elif isinstance(message, ToolResultMessage):
+                self._state.update_tool(
+                    message.tool_call_id,
+                    message.tool_name,
+                    "失败" if message.is_error else "结束",
+                    output=message.text,
+                    error=message.is_error,
+                )
         elif isinstance(event, ToolExecutionStartEvent):
             self._state.update_tool(event.tool_call_id, event.tool_name, "执行中", args=event.args)
         elif isinstance(event, ToolExecutionUpdateEvent):

@@ -21,6 +21,10 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     default_thinking: ThinkingLevel = "high"
     thinking: ThinkingLevel = "high"
 
+    def context_window(self, model: str) -> int | None:
+        """官方声明的输入与输出合计容量，不用推测未知模型的上限。"""
+        return 1_048_576 if model in ("deepseek-flash", "deepseek-v4-pro") else None
+
     def thinking_options(self, model: str) -> tuple[ThinkingLevel, ...]:
         """根据模型名，返回用户可以选择的思考设置。
 

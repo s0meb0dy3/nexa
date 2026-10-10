@@ -109,11 +109,22 @@ class UserMessage(WireModel):
         return "".join(block.text for block in self.content)
 
 
+class TokenUsage(WireModel):
+    """一次模型请求的 API 实测值；total 包含输入历史和本次输出，不累计请求。"""
+
+    model: str
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+
+
 class AssistantMessage(WireModel):
     """Agent 返回的消息，可以按顺序包含文字和工具调用。"""
 
     # role 固定为 "assistant"，表示消息来自助手。
     role: Literal["assistant"] = "assistant"
+    # 随消息落盘；旧消息或未收到 API 统计时为 None，不用 0 代替未知。
+    usage: TokenUsage | None = None
     # 内容按顺序保存；每一项要么是文字，要么是思考，要么是工具调用。
     # 没有内容时，使用一个新的空列表。
     content: list[TextContent | ThinkingContent | ToolCall] = Field(default_factory=list)
@@ -222,6 +233,7 @@ __all__ = [
     "Message",
     "TextContent",
     "ThinkingContent",
+    "TokenUsage",
     "ToolCall",
     "ToolResultMessage",
     "UserMessage",

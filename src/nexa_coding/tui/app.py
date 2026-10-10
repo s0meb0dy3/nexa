@@ -15,13 +15,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
-from textual.widgets import Button, Collapsible, Footer, Markdown, OptionList, Static, TextArea
+from textual.widgets import Collapsible, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual.worker import Worker, WorkerCancelled
 
 from nexa_agent.events import MessageDeltaEvent
-from nexa_agent.messages import AssistantMessage, ToolResultMessage, UserMessage
-from nexa_agent.session.memory import SessionState
 from nexa_agent.session.storage import JsonlStorage
 from nexa_coding.commands import COMMANDS, completions, parse_command
 from nexa_coding.config import load_config
@@ -71,10 +69,10 @@ class ToolDetail(Collapsible):
 
 class NexaTuiApp(App):
     BINDINGS = [
-        Binding("escape", "cancel", "取消", priority=True),
-        Binding("ctrl+t", "toggle_thinking", "展开思考"),
-        Binding("ctrl+end", "jump_bottom", "到底部", priority=True),
-        Binding("ctrl+q", "quit", "退出"),
+        Binding("escape", "cancel", "取消", priority=True, show=False),
+        Binding("ctrl+t", "toggle_thinking", "展开思考", show=False),
+        Binding("ctrl+end", "jump_bottom", "到底部", priority=True, show=False),
+        Binding("ctrl+q", "quit", "退出", show=False),
     ]
 
     CSS = """
@@ -89,16 +87,14 @@ class NexaTuiApp(App):
         border: none; }
     .tool-output { height: auto; padding: 0 1 1 1; }
     .failed { border-left: thick #eb9a89; }
-    #activity { height: 1; margin: 0 2; }
-    #status { width: 1fr; color: #8fa5b2; }
-    #jump-bottom { min-width: 14; height: 1; border: none; padding: 0 1;
-        background: #20363b; color: #a7e6e0; }
+    #status { height: 1; margin: 0 2; color: #8fa5b2; }
     #completions { height: auto; max-height: 6; margin: 0 2; border: none; background: #142026; }
     #prompt-input { height: 3; max-height: 8; margin: 1 2 0 2;
         border: solid #38565e; background: #142026; }
-    #input-help { height: 1; margin: 0 2; color: #8fa5b2; }
-    #environment { height: 1; margin: 0 2; color: #79d6cf; }
-    Footer { background: #142026; }
+    #input-meta { height: 1; margin: 0 2; }
+    #input-help { height: 1; width: auto; max-width: 50%; margin-left: 2; color: #8fa5b2; }
+    #environment { height: 1; width: 1fr; color: #79d6cf; }
+    #context-usage { height: 1; width: auto; margin-left: 2; color: #79d6cf; }
     """
 
     def __init__(self, provider, *, model: str, cwd: Path, paths: NexaPaths | None = None) -> None:
@@ -107,7 +103,9 @@ class NexaTuiApp(App):
         self._model = model
         self._cwd = cwd
         self._paths = paths or NexaPaths()
-        self._sessions = SessionManager(self._paths.project_session_dir(cwd.resolve()))
+        self._sessions = SessionManager(
+            self._paths.project_session_dir(cwd.resolve()), config_file=self._paths.config_file
+        )
         self._session_path = self._sessions.current_path()
         self._session: CodingSession | None = None
         self._command_busy = False
@@ -130,19 +128,18 @@ class NexaTuiApp(App):
             # 流式预览保留一个组件；Markdown.update 会拆除代码块子组件，
             # 与 Textual 的鼠标文本选择产生竞争。完整回复仍使用 Markdown。
             yield Static("", id="stream-answer", markup=False)
-        with Horizontal(id="activity"):
-            yield Static("待机", id="status", markup=False)
-            yield Button("回到底部 ↓", id="jump-bottom")
+        yield Static("", id="status", markup=False)
         yield OptionList(id="completions")
         yield PromptInput(
-            placeholder="输入问题，或粘贴代码和错误日志…",
+            placeholder="Enjoy your coding journey! 输入 /help 查看命令",
             id="prompt-input",
             show_line_numbers=False,
             highlight_cursor_line=False,
         )
-        yield Static("Enter 发送 · Shift+Enter / Ctrl+J 换行 · Esc 取消", id="input-help")
-        yield Static("", id="environment", markup=False)
-        yield Footer()
+        with Horizontal(id="input-meta"):
+            yield Static("", id="environment", markup=False)
+            yield Static("", id="context-usage", markup=False)
+            yield Static("Enter 发送 · Shift+Enter 换行", id="input-help")
 
     @property
     def _view(self):
@@ -153,7 +150,7 @@ class NexaTuiApp(App):
         self._view.query_one(PromptInput).focus()
         self._view.query_one("#transcript", VerticalScroll).anchor()
         self._view.query_one("#completions").display = False
-        self._view.query_one("#jump-bottom").display = False
+        self._view.query_one("#status").display = False
         self._view.query_one("#stream-thinking").display = False
         self._view.query_one("#stream-answer").display = False
         self._refresh_environment()
@@ -199,16 +196,44 @@ class NexaTuiApp(App):
         thinking = self._session.thinking if self._session else self._provider.default_thinking
         label = "模型默认" if thinking == "default" else thinking
         model = f"{provider} / {self._model} · 思考 {label}"
+        self._view.query_one("#context-usage", Static).update(self._context_status())
+        # 窄窗口优先保留实测统计，快捷键仍可通过 /help 查看。
+        self._view.query_one("#input-help").display = self.size.width >= 160
         branch = f" · {self._branch}" if self._branch else ""
         branch += f" · 会话 {self._session_path.stem[:8]}"
-        budget = max(12, self.size.width - len(model) - len(branch) - 7)
+        width = self._view.query_one("#environment").size.width
+        budget = max(12, width - len(model) - len(branch) - 3)
         if len(path) > budget:
             path = "…" + path[-(budget - 1) :]
         self._view.query_one("#environment", Static).update(f"{path}{branch}   {model}")
 
+    def _context_status(self, *, detailed: bool = False) -> str:
+        usage = self._state.usage
+        limit = self._provider.context_window(self._model)
+        if not detailed:
+            if usage is None:
+                return "上下文 —"
+
+            def compact(tokens: int) -> str:
+                if tokens >= 1_000_000:
+                    return f"{tokens / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+                if tokens >= 1_000:
+                    return f"{tokens / 1_000:.1f}".rstrip("0").rstrip(".") + "k"
+                return str(tokens)
+
+            used = compact(usage.total_tokens)
+            if limit is None:
+                return f"上下文 {used} · 上限未知"
+            return f"上下文 {usage.total_tokens / limit:.1%} · {used}/{compact(limit)}"
+
+        used = f"{usage.total_tokens:,}" if usage else "—"
+        if limit is None:
+            return f"已测上下文 {used} · 上限未知"
+        percent = f" · {usage.total_tokens / limit:.1%}" if usage else ""
+        return f"已测上下文 {used} / {limit:,}{percent}"
+
     def on_resize(self) -> None:
-        if self.is_mounted:
-            self._refresh_environment()
+        self.call_after_refresh(self._refresh_environment)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         editor = self._view.query_one(PromptInput)
@@ -256,7 +281,7 @@ class NexaTuiApp(App):
         if command is not None:
             name, argument = command
             if self._command_busy or (
-                name in ("new", "resume", "model", "thinking") and self._state.running
+                name in ("new", "resume", "model", "thinking", "tree") and self._state.running
             ):
                 self._state.add_tool("命令", "请等待当前任务完成，或按 Esc 取消")
                 self._refresh()
@@ -271,9 +296,7 @@ class NexaTuiApp(App):
             )
             return
         self._view.query_one(PromptInput).load_text("")
-        self._view.query_one("#input-help", Static).update(
-            "Enter 发送 · Shift+Enter / Ctrl+J 换行 · Esc 取消"
-        )
+        self._view.query_one("#input-help", Static).update("Enter 发送 · Shift+Enter 换行")
         self._state.error = None
         self._state.set_running(True)
         self._state.add_user(text)
@@ -281,22 +304,14 @@ class NexaTuiApp(App):
         self._current_worker = self._run_prompt(text)
 
     def _load_session(self, path: Path, *, fresh: bool = False):
-        provider = self._provider
-        if not fresh:
-            state = SessionState.from_entries(JsonlStorage(path).read_all())
-            if state.provider and state.provider != getattr(provider, "name", None):
-                config = load_config(self._paths.config_file)
-                profile = config.providers.get(state.provider)
-                if profile is None:
-                    raise ValueError(f"会话使用的供应商 {state.provider} 不在配置中")
-                provider = build_provider(profile)
         session = CodingSession.load(
             CodingSessionConfig(
-                provider=provider,
+                provider=self._provider,
                 model=self._model,
                 cwd=self._cwd,
                 storage=JsonlStorage(path),
                 thinking=self._session.thinking if fresh and self._session else "default",
+                resolve_provider=self._sessions.resolve_provider,
             )
         )
         return session, session.provider
@@ -308,6 +323,7 @@ class NexaTuiApp(App):
                 self._sessions.select(self._session_path)
             self._session = session
             self._provider = provider
+            self._state.usage = session.latest_usage
         return self._session
 
     async def _activate_session(self, path: Path, *, fresh: bool = False) -> None:
@@ -321,30 +337,9 @@ class NexaTuiApp(App):
         self._item_widgets.clear()
         self._item_versions.clear()
         self._tool_outputs.clear()
-        self._state = TuiState()
+        self._state = TuiState.from_messages(session.messages)
         self._adapter = TuiEventAdapter(self._state)
-        for message in session.messages:
-            if isinstance(message, UserMessage):
-                self._state.add_user(message.text)
-            elif isinstance(message, AssistantMessage):
-                if message.thinking:
-                    self._state.add_thinking(message.thinking)
-                self._state.end_assistant(message.text)
-                for call in message.tool_calls:
-                    self._state.update_tool(call.id, call.name, "已中断", args=call.arguments)
-                    self._state.chat_items[-1].historical = True
-            elif isinstance(message, ToolResultMessage):
-                self._state.update_tool(
-                    message.tool_call_id,
-                    message.tool_name,
-                    "失败" if message.is_error else "结束",
-                    output=message.text,
-                    error=message.is_error,
-                )
-                item = next(
-                    i for i in self._state.chat_items if i.tool_call_id == message.tool_call_id
-                )
-                item.historical = True
+        self._state.usage = session.latest_usage
         self._state.add_tool("会话", f"{'新建' if fresh else '恢复'} {path.stem}")
         if session.thinking_notice:
             self._state.add_tool("思考", session.thinking_notice)
@@ -375,7 +370,7 @@ class NexaTuiApp(App):
                     )
                     + "\nTab 补全 · ↑↓ 选择 · Enter 执行 · Esc 取消 / 关闭窗口",
                 )
-            elif name == "exit":
+            elif name == "quit":
                 worker = self._current_worker
                 if worker is not None:
                     self.action_cancel()
@@ -402,6 +397,19 @@ class NexaTuiApp(App):
                     argument = await self.push_screen_wait(ChoiceScreen("恢复会话", choices))
                 if argument:
                     await self._activate_session(self._sessions.path_for(argument))
+            elif name == "tree":
+                session = self._ensure_session()
+                if not argument:
+                    choices = session.branch_choices()
+                    if not choices:
+                        raise ValueError("当前会话还没有可选择的历史消息")
+                    argument = await self.push_screen_wait(
+                        ChoiceScreen("会话树 · 从此节点继续，保留原分支", choices)
+                    )
+                if argument:
+                    session.branch_to_entry(argument)
+                    await self._activate_session(self._session_path)
+                    self._state.add_tool("分支", f"已回到 {argument}，后续消息从这里继续")
             elif name == "model":
                 config = load_config(self._paths.config_file)
                 if not config.providers:
@@ -430,6 +438,7 @@ class NexaTuiApp(App):
                             model=profile.model,
                             cwd=self._cwd,
                             storage=JsonlStorage(self._session_path),
+                            resolve_provider=self._sessions.resolve_provider,
                         ),
                         model_override=profile.model,
                     )
@@ -437,6 +446,10 @@ class NexaTuiApp(App):
                     if self._session is None:
                         await self._activate_session(self._session_path)
                     self._state.error = None
+                    if profile.model != self._model or profile.name != getattr(
+                        self._provider, "name", None
+                    ):
+                        self._state.usage = None
                     self._provider, self._model = session.provider, profile.model
                     if reset:
                         self._state.add_tool(
@@ -444,6 +457,14 @@ class NexaTuiApp(App):
                         )
                     self._refresh_environment()
                     self._state.add_tool("模型", f"已切换为 {profile.name} / {profile.model}")
+            elif name == "usage":
+                self._ensure_session()
+                self._state.add_tool(
+                    "上下文统计",
+                    self._context_status(detailed=True)
+                    + "\n基于最近完整响应的 API total_tokens（输入历史 + 本次输出）。"
+                    "\n不累加历次请求，不包含随后尚未发送的内容；暂无统计时显示 —。",
+                )
             elif name == "thinking":
                 session = self._ensure_session()
                 if argument:
@@ -502,9 +523,6 @@ class NexaTuiApp(App):
             return
         if self._state.running:
             self._refresh()
-        else:
-            transcript = self._view.query_one("#transcript", VerticalScroll)
-            self._view.query_one("#jump-bottom").display = not transcript.is_vertical_scroll_end
 
     def action_cancel(self) -> None:
         if isinstance(self.screen, ChoiceScreen):
@@ -521,17 +539,11 @@ class NexaTuiApp(App):
 
     def action_jump_bottom(self) -> None:
         self._view.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
-        self._view.query_one("#jump-bottom").display = False
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "jump-bottom":
-            self.action_jump_bottom()
 
     def _refresh(self) -> None:
         if not self._view.query("#transcript"):
             return
         transcript = self._view.query_one("#transcript", VerticalScroll)
-        follow = transcript.is_vertical_scroll_end
         for index, item in enumerate(self._state.chat_items):
             if index >= len(self._item_widgets):
                 if item.tool_call_id:
@@ -604,7 +616,7 @@ class NexaTuiApp(App):
         if self._stream_text != text:
             answer.update(RichMarkdown(text) if text else "")
             self._stream_text = text
-        status = "待机"
+        status = ""
         if self._state.running:
             active = next(
                 (
@@ -614,11 +626,20 @@ class NexaTuiApp(App):
                 ),
                 None,
             )
-            status = f"执行中：{active.text}" if active else "等待模型 / 输出中…"
+            if active:
+                status = f"执行中：{active.text}"
+            elif text:
+                status = "正在回答…"
+            elif reasoning:
+                status = "正在思考…"
+            else:
+                status = "正在连接模型…"
         if self._state.error:
             status = f"错误：{self._state.error}"
-        self._view.query_one("#status", Static).update(status)
-        self._view.query_one("#jump-bottom").display = not follow
+        status_widget = self._view.query_one("#status", Static)
+        status_widget.update(status)
+        status_widget.display = bool(status)
+        self._refresh_environment()
 
 
 __all__ = ["NexaTuiApp"]
