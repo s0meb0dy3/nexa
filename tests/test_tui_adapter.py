@@ -77,12 +77,15 @@ def test_tool_events_produce_tool_items():
         )
     )
 
-    # 开始 + 结束（失败）两条 tool 记录。
-    assert len(state.chat_items) == 2
-    assert all(item.kind == ChatItemKind.tool for item in state.chat_items)
-    assert "read" in state.chat_items[0].text
-    assert "失败" in state.chat_items[1].text
-    assert state.chat_items[1].error is True
+    # 同一次工具调用更新同一个条目，保留完整结果。
+    assert len(state.chat_items) == 1
+    item = state.chat_items[0]
+    assert item.kind == ChatItemKind.tool
+    assert "read" in item.text
+    assert item.status == "失败"
+    assert item.error is True
+    assert item.output == "文件内容"
+    assert item.elapsed is not None
 
 
 def test_user_message_added():

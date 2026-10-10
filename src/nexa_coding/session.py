@@ -11,18 +11,19 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from nexa_agent.events import AgentEvent
 from nexa_agent.harness import AgentHarness, AgentHarnessConfig
 from nexa_agent.messages import AgentMessage
-from nexa_agent.provider import ModelProvider
+from nexa_agent.provider import ModelProvider, ThinkingLevel
 from nexa_agent.session.entries import (
     Entry,
     LeafEntry,
     MessageEntry,
     ModelChangeEntry,
     SessionInfoEntry,
+    ThinkingChangeEntry,
 )
 from nexa_agent.session.memory import SessionState
 from nexa_agent.session.storage import JsonlStorage
@@ -32,7 +33,7 @@ from nexa_coding.skills import Skill, expand_skill_command, load_skills
 from nexa_coding.system_prompt import BuildSystemPromptOptions, build_system_prompt
 from nexa_coding.tools import create_coding_tools
 
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = "deepseek-flash"
 
 
 # ── 存储接口 ─────────────────────────────────────────────────────────────────
@@ -69,6 +70,7 @@ class CodingSessionConfig:
 
     provider: ModelProvider
     model: str = DEFAULT_MODEL
+    thinking: ThinkingLevel = "default"
     system: str | None = None
     # 为 None 时在 load() 里按 config.cwd 算项目隔离路径（default_factory 拿不到 cwd）。
     storage: SessionStorage | None = None
@@ -107,6 +109,8 @@ class CodingSession:
     ) -> None:
         """由 load() 内部调用，一般不要直接构造。"""
         self._provider = provider
+        self._thinking: ThinkingLevel = "default"
+        self.thinking_notice: str | None = None
         self._model = model
         self._system = system
         self._storage = storage
@@ -122,11 +126,14 @@ class CodingSession:
     # ── 类方法：加载 / 新建 ──────────────────────────────────────────────────
 
     @classmethod
-    def load(cls, config: CodingSessionConfig) -> CodingSession:
+    def load(
+        cls, config: CodingSessionConfig, *, model_override: str | None = None
+    ) -> CodingSession:
         """加载（或新建）一个会话。
 
         读账本 → 重放 SessionState → 用恢复的消息建 harness → 注册工具。
         空会话则追加 SessionInfoEntry + ModelChangeEntry。
+        model_override 用于 /model 显式选择新模型，避免旧模型阻止会话加载。
         """
         cwd = Path(config.cwd).resolve()
 
@@ -136,10 +143,22 @@ class CodingSession:
         entries = storage.read_all()
         state = SessionState.from_entries(entries)
 
+        model = model_override or state.model or config.model
+        requested = state.thinking if state.model else config.thinking
+        options = config.provider.thinking_options(model)
+        thinking = requested if requested in options else config.provider.default_thinking
+        provider = config.provider.with_thinking(model, thinking)
+
         # 空会话：先落一条会话信息 + 一条模型记录。
         if not entries:
             session_info = SessionInfoEntry(id="info", parent_id=None, cwd=str(cwd))
-            model_change = ModelChangeEntry(id="model", parent_id="info", model=config.model)
+            model_change = ModelChangeEntry(
+                id="model",
+                parent_id="info",
+                model=config.model,
+                provider=getattr(config.provider, "name", None),
+                thinking=thinking,
+            )
             storage.append(session_info)
             storage.append(model_change)
             entries = [session_info, model_change]
@@ -158,17 +177,17 @@ class CodingSession:
         # 用恢复的消息建 harness；空会话则从空历史开始。
         harness = AgentHarness(
             AgentHarnessConfig(
-                provider=config.provider,
-                model=state.model or config.model,
+                provider=provider,
+                model=model,
                 system=system,
                 tools=tools,
             )
         )
         harness.replace_messages(state.messages)
 
-        return cls(
-            provider=config.provider,
-            model=config.model,
+        session = cls(
+            provider=provider,
+            model=model,
             system=system,
             storage=storage,
             cwd=cwd,
@@ -176,8 +195,73 @@ class CodingSession:
             entries=entries,
             skills=skills,
         )
+        session._thinking = thinking
+        session.thinking_notice = (
+            f"模型 {model} 不支持 {requested}，思考已切换为 {thinking}"
+            if state.model and thinking != requested
+            else None
+        )
+        return session
 
     # ── 对外 API ─────────────────────────────────────────────────────────────
+
+    def select_model(self, provider: ModelProvider, model: str, provider_name: str) -> bool:
+        """账本写入成功之后，才发布新的运行配置。"""
+        if self._harness.is_running:
+            raise RuntimeError("运行中不能切换模型")
+        options = provider.thinking_options(model)
+        thinking = self.thinking if self.thinking in options else provider.default_thinking
+        reset = thinking != self.thinking
+        provider = provider.with_thinking(model, thinking)
+        entry = ModelChangeEntry(
+            id=self._new_id("model"),
+            parent_id=self._entries[-1].id if self._entries else None,
+            model=model,
+            provider=provider_name,
+            thinking=thinking,
+        )
+        self._storage.append(entry)
+        self._entries.append(entry)
+        self._harness.select_model(provider, model)
+        self._provider = provider
+        self._model = model
+        self._thinking = thinking
+        return reset
+
+    @property
+    def provider(self) -> ModelProvider:
+        return self._provider
+
+    @property
+    def thinking(self) -> ThinkingLevel:
+        return self._thinking
+
+    @property
+    def thinking_options(self) -> tuple[ThinkingLevel, ...]:
+        return self._provider.thinking_options(self.model)
+
+    def set_thinking(self, level: str) -> None:
+        if self._harness.is_running:
+            raise RuntimeError("运行中不能修改思考设置")
+        if level == self.thinking:
+            return
+        setting = cast(ThinkingLevel, level)
+        candidate = self._provider.with_thinking(self.model, setting)
+        entry = ThinkingChangeEntry(
+            id=self._new_id("thinking"),
+            parent_id=self._entries[-1].id if self._entries else None,
+            thinking=setting,
+        )
+        self._storage.append(entry)
+        self._entries.append(entry)
+        self._harness.select_model(candidate, self.model)
+        self._provider = candidate
+        self._thinking = setting
+
+    @property
+    def model(self) -> str:
+        """本次会话实际使用的模型（包括账本恢复的选择）。"""
+        return self._harness.model
 
     @property
     def messages(self) -> tuple[AgentMessage, ...]:
@@ -210,22 +294,21 @@ class CodingSession:
         self._persist_new_messages(before)
 
     def handle_command(self, text: str) -> str | None:
-        """处理会话命令。
+        """兼容旧调用者；交互命令由 TUI 执行，元数据只有一份。"""
+        from nexa_coding.commands import COMMANDS, parse_command
 
-        目前只支持 /help 和 /exit；未知命令返回说明文本。
-        /skill:... 是技能命令，交给 prompt() 展开，这里放行（返回 None）。
-        """
-        command = text.strip()
-        if command == "/help":
-            return "可用命令：/help 显示帮助，/exit 结束会话。"
-        if command == "/exit":
-            return "退出"
-        if command.startswith("/skill:"):
-            # 技能命令由 prompt() 负责展开，不在这里拦截。
+        try:
+            command = parse_command(text)
+        except ValueError as error:
+            return str(error)
+        if command is None:
             return None
-        if command.startswith("/"):
-            return f"未知命令：{command}（只支持 /help 和 /exit）"
-        return None
+        name, _ = command
+        if name == "help":
+            return "\n".join(f"/{key} {value}" for key, value in COMMANDS.items())
+        if name == "exit":
+            return "退出"
+        return "请在交互界面执行此命令"
 
     # ── 内部实现 ─────────────────────────────────────────────────────────────
 

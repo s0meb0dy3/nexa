@@ -6,7 +6,7 @@
 
     [providers.deepseek]
     base_url = "https://api.deepseek.com"
-    model    = "deepseek-chat"
+    model    = "deepseek-flash"
     api_key  = "sk-..."
 
     [providers.ollama]           # api 可省，默认 "openai"
@@ -15,7 +15,7 @@
     api_key  = "ollama"
 
 本模块只负责"读文件 + 解析成数据"，不 import nexa_ai，也不构造 Provider——
-把档案变成 Provider 是 CLI 层（cli.build_provider）的事，这样数据与实现解耦。
+把档案变成 Provider 是 providers.build_provider 的事，这样数据与实现解耦。
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ default_provider = "deepseek"
 
 [providers.deepseek]
 base_url = "https://api.deepseek.com"
-model    = "deepseek-chat"
+model    = "deepseek-flash"
 api_key  = "sk-..."
 """
 

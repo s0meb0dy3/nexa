@@ -13,7 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from nexa_agent.messages import AgentMessage
-from nexa_agent.session.entries import Entry, LabelEntry, MessageEntry, ModelChangeEntry
+from nexa_agent.provider import ThinkingLevel
+from nexa_agent.session.entries import (
+    Entry,
+    LabelEntry,
+    MessageEntry,
+    ModelChangeEntry,
+    ThinkingChangeEntry,
+)
 from nexa_agent.session.tree import path_to_entry
 
 
@@ -29,6 +36,8 @@ class SessionState:
 
     messages: list[AgentMessage] = field(default_factory=list)
     model: str = ""
+    provider: str | None = None
+    thinking: ThinkingLevel = "default"
     label: str | None = None
 
     @classmethod
@@ -55,6 +64,10 @@ class SessionState:
             elif isinstance(entry, ModelChangeEntry):
                 # 模型切换条目：账本只记新状态，回放时覆盖当前模型。
                 state.model = entry.model
+                state.provider = entry.provider
+                state.thinking = entry.thinking
+            elif isinstance(entry, ThinkingChangeEntry):
+                state.thinking = entry.thinking
             elif isinstance(entry, LabelEntry):
                 # 标签条目：回放时覆盖当前标签。
                 state.label = entry.label

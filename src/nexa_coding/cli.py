@@ -7,9 +7,9 @@ import sys
 from pathlib import Path
 
 from nexa_agent.provider import ModelProvider
-from nexa_ai.openai_compatible import OpenAICompatibleProvider
 from nexa_coding.config import ConfigError, ProviderProfile, load_config, resolve_profile
 from nexa_coding.paths import NexaPaths
+from nexa_coding.providers import build_provider
 from nexa_coding.tui import NexaTuiApp
 
 
@@ -29,22 +29,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--cwd", type=Path, default=Path.cwd(), help="工具可访问的项目目录")
     return parser.parse_args(argv)
-
-
-def build_provider(profile: ProviderProfile) -> ModelProvider:
-    """把供应商档案变成具体的 Provider。
-
-    这里是配置（数据）和 nexa_ai（实现）之间唯一的接缝：将来接 Anthropic
-    等新协议，只需在这里加一个分支 + 在 nexa_ai 加一个类，调用方都不用动。
-    """
-
-    if profile.api == "openai":
-        return OpenAICompatibleProvider(
-            name=profile.name,
-            api_key=profile.api_key,
-            base_url=profile.base_url,
-        )
-    raise ConfigError(f"未知的 api 类型 {profile.api!r}（档案 {profile.name!r}）")
 
 
 def resolve_provider(

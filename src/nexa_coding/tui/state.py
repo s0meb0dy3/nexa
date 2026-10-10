@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from time import monotonic
 
 
 class ChatItemKind(StrEnum):
@@ -37,6 +38,12 @@ class ChatItem:
     kind: ChatItemKind
     text: str
     error: bool = False
+    tool_call_id: str | None = None
+    output: str = ""
+    started_at: float | None = None
+    elapsed: float | None = None
+    status: str = ""
+    historical: bool = False
 
 
 @dataclass
@@ -100,6 +107,38 @@ class TuiState:
         self.chat_items.append(
             ChatItem(kind=ChatItemKind.tool, text=f"{name} — {status}", error=error)
         )
+
+    def update_tool(
+        self,
+        call_id: str,
+        name: str,
+        status: str,
+        *,
+        args: dict | None = None,
+        output: str = "",
+        error: bool = False,
+    ) -> None:
+        item = next((i for i in self.chat_items if i.tool_call_id == call_id), None)
+        if item is None:
+            detail = (args or {}).get("path") or (args or {}).get("command") or ""
+            item = ChatItem(
+                kind=ChatItemKind.tool,
+                text=f"{name}  {detail}",
+                tool_call_id=call_id,
+                started_at=monotonic(),
+            )
+            self.chat_items.append(item)
+        item.status = status
+        item.error = error
+        item.output = output
+        if status in ("结束", "失败", "已中断"):
+            item.elapsed = monotonic() - item.started_at
+
+    def interrupt_tools(self) -> None:
+        for item in self.chat_items:
+            if item.tool_call_id and item.elapsed is None:
+                item.status = "已中断"
+                item.elapsed = monotonic() - item.started_at
 
     def add_thinking(self, text: str) -> None:
         """记录一条思考内容。"""

@@ -30,7 +30,7 @@ default_provider = "deepseek"
 
 [providers.deepseek]
 base_url = "https://api.deepseek.com"
-model = "deepseek-chat"
+model = "deepseek-flash"
 api_key = "sk-abc"
 """,
     )
@@ -42,7 +42,7 @@ api_key = "sk-abc"
     profile = config.providers["deepseek"]
     assert profile.name == "deepseek"
     assert profile.base_url == "https://api.deepseek.com"
-    assert profile.model == "deepseek-chat"
+    assert profile.model == "deepseek-flash"
     assert profile.api_key == "sk-abc"
     assert profile.api == "openai"  # 缺省协议
 

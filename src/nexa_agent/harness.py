@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from nexa_agent.events import AgentEndEvent, AgentEvent
@@ -40,7 +40,7 @@ class AgentHarnessConfig:
 
     Attributes:
         provider: 模型 Provider（DeepSeek、OpenAI 等）
-        model: 模型名称，如 "deepseek-chat"
+        model: 模型名称，如 "deepseek-flash"
         system: 系统提示词
         tools: 可用工具列表
         max_turns: 单次 prompt/continue 的最大轮次，默认 10
@@ -67,7 +67,7 @@ class AgentHarness:
     - 支持取消操作
 
     使用示例：
-        config = AgentHarnessConfig(provider=..., model="deepseek-chat")
+        config = AgentHarnessConfig(provider=..., model="deepseek-flash")
         harness = AgentHarness(config)
 
         # 发送消息并等待回复
@@ -107,6 +107,15 @@ class AgentHarness:
         self._current_task: asyncio.Task | None = None
 
     # ── 属性 ──────────────────────────────────────────────────────────────────
+
+    def select_model(self, provider: ModelProvider, model: str) -> None:
+        if self._is_running:
+            raise RuntimeError("运行中不能切换模型")
+        self._config = replace(self._config, provider=provider, model=model)
+
+    @property
+    def model(self) -> str:
+        return self._config.model
 
     @property
     def messages(self) -> tuple[AgentMessage, ...]:

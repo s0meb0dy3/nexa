@@ -8,15 +8,27 @@ nexa_ai → nexa_agent。
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Literal, Protocol
 
 from nexa_agent.messages import AgentMessage
 from nexa_agent.provider_events import ProviderEvent
 from nexa_agent.tools import AgentTool
 
+type ThinkingLevel = Literal["default", "off", "on", "low", "medium", "high", "max"]
+
 
 class ModelProvider(Protocol):
     """所有模型后端都要实现的最小接口。"""
+
+    default_thinking: ThinkingLevel
+
+    def thinking_options(self, model: str) -> tuple[ThinkingLevel, ...]:
+        """当前模型支持的设置；default 表示不指定 API 参数。"""
+        ...
+
+    def with_thinking(self, model: str, level: ThinkingLevel) -> ModelProvider:
+        """验证设置并返回候选 Provider，不修改当前实例。"""
+        ...
 
     def stream_response(
         self,
@@ -31,4 +43,4 @@ class ModelProvider(Protocol):
         ...
 
 
-__all__ = ["ModelProvider"]
+__all__ = ["ModelProvider", "ThinkingLevel"]

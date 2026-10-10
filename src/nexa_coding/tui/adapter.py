@@ -69,12 +69,24 @@ class TuiEventAdapter:
                     self._state.add_thinking(message.thinking)
                 self._state.end_assistant(message.text)
         elif isinstance(event, ToolExecutionStartEvent):
-            self._state.add_tool(event.tool_name, "开始")
+            self._state.update_tool(event.tool_call_id, event.tool_name, "执行中", args=event.args)
         elif isinstance(event, ToolExecutionUpdateEvent):
-            self._state.add_tool(event.tool_name, "更新")
+            self._state.update_tool(
+                event.tool_call_id,
+                event.tool_name,
+                "执行中",
+                args=event.args,
+                output=event.partial_result.text,
+            )
         elif isinstance(event, ToolExecutionEndEvent):
             status = "失败" if event.is_error else "结束"
-            self._state.add_tool(event.tool_name, status, error=event.is_error)
+            self._state.update_tool(
+                event.tool_call_id,
+                event.tool_name,
+                status,
+                output=event.result.text,
+                error=event.is_error,
+            )
         # TurnStartEvent / TurnEndEvent 对显示无意义，忽略。
 
 

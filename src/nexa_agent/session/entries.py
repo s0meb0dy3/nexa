@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from nexa_agent.messages import AgentMessage, WireModel
+from nexa_agent.provider import ThinkingLevel
 
 # ── 条目基类 ─────────────────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ class BaseEntry(WireModel):
     # parent_id 指向它的"前一条"，从而把条目串成树。
     parent_id: str | None = None
     # 判别字段：type="message" → MessageEntry，依此类推。
-    type: Literal["message", "model_change", "label", "session_info", "leaf"]
+    type: Literal["message", "model_change", "label", "session_info", "leaf", "thinking_change"]
 
 
 # ── 消息条目 ─────────────────────────────────────────────────────────────────
@@ -64,6 +65,14 @@ class ModelChangeEntry(BaseEntry):
     model: str
     # 可选的提供商名字，比如 "deepseek"、"openai"。
     provider: str | None = None
+    thinking: ThinkingLevel = "default"
+
+
+class ThinkingChangeEntry(BaseEntry):
+    """会话的模型思考设置；与界面展开状态无关。"""
+
+    type: Literal["thinking_change"] = "thinking_change"
+    thinking: ThinkingLevel
 
 
 # ── 标签条目 ─────────────────────────────────────────────────────────────────
@@ -111,7 +120,12 @@ class LeafEntry(BaseEntry):
 
 # 用 type 字段区分具体是哪种条目；type="message" 就解析成 MessageEntry。
 type Entry = Annotated[
-    MessageEntry | ModelChangeEntry | LabelEntry | SessionInfoEntry | LeafEntry,
+    MessageEntry
+    | ModelChangeEntry
+    | ThinkingChangeEntry
+    | LabelEntry
+    | SessionInfoEntry
+    | LeafEntry,
     Field(discriminator="type"),
 ]
 
@@ -123,4 +137,5 @@ __all__ = [
     "MessageEntry",
     "ModelChangeEntry",
     "SessionInfoEntry",
+    "ThinkingChangeEntry",
 ]

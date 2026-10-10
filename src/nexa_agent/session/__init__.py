@@ -17,6 +17,7 @@ from nexa_agent.session.entries import (
     MessageEntry,
     ModelChangeEntry,
     SessionInfoEntry,
+    ThinkingChangeEntry,
 )
 from nexa_agent.session.jsonl import entry_from_line, entry_to_line
 from nexa_agent.session.memory import SessionState
@@ -32,6 +33,7 @@ __all__ = [
     "MessageEntry",
     "ModelChangeEntry",
     "SessionInfoEntry",
+    "ThinkingChangeEntry",
     "SessionState",
     "entry_from_line",
     "entry_to_line",

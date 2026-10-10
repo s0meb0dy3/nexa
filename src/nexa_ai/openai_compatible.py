@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from typing import Self
 
 import httpx
 
@@ -20,6 +21,7 @@ from nexa_agent.messages import (
     ToolResultMessage,
     UserMessage,
 )
+from nexa_agent.provider import ThinkingLevel
 from nexa_agent.provider_events import (
     ProviderDeltaEvent,
     ProviderErrorEvent,
@@ -40,6 +42,8 @@ class OpenAICompatibleProvider:
     - 本地部署的 OpenAI 兼容模型（如 Ollama、vLLM）
     """
 
+    default_thinking: ThinkingLevel = "default"
+
     def __init__(
         self,
         *,
@@ -58,6 +62,23 @@ class OpenAICompatibleProvider:
         self.api_key = api_key
         # base_url 是 API 的基础地址，不带末尾斜杠。
         self.base_url = base_url.rstrip("/")
+
+    def thinking_options(self, model: str) -> tuple[ThinkingLevel, ...]:
+        return ("default",)
+
+    def with_thinking(self, model: str, level: ThinkingLevel) -> Self:
+        options = self.thinking_options(model)
+        if level not in options:
+            raise ValueError(f"模型 {model} 不支持思考设置 {level}；可用：{', '.join(options)}")
+        return self
+
+    def _thinking_parameters(self, model: str) -> dict:
+        return {}
+
+    def _request_messages(
+        self, system: str, messages: list[AgentMessage], tools: list[AgentTool]
+    ) -> list[dict]:
+        return self._convert_messages(system, messages)
 
     def stream_response(
         self,
@@ -89,12 +110,14 @@ class OpenAICompatibleProvider:
         }
 
         # 把内部消息格式转换成 OpenAI 兼容 API 需要的格式。
-        api_messages = self._convert_messages(system, messages)
+        api_messages = self._request_messages(system, messages, tools)
         payload: dict = {
             "model": model,
             "messages": api_messages,
             "stream": True,
         }
+
+        payload.update(self._thinking_parameters(model))
 
         # 如果有工具定义，也一起发送。
         if tools:
@@ -274,9 +297,7 @@ class OpenAICompatibleProvider:
 
             elif isinstance(msg, AssistantMessage):
                 # 助手消息：可能同时包含文字和工具调用。
-                # 注意：思考块（ThinkingContent）有意不回传——只取 msg.text（正文）
-                # 和 msg.tool_calls。DeepSeek 这类接口不接受把推理内容塞回请求；
-                # 将来接 Anthropic 时，带签名的思考需要按其要求回传，届时应新增适配器处理。
+                # 通用兼容接口只发送正文和工具调用；思考回传由具体 Provider 处理。
                 entry: dict = {"role": "assistant"}
                 text = msg.text
                 tool_calls = msg.tool_calls

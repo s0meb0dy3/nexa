@@ -111,7 +111,7 @@ def test_from_entries_replays_state() -> None:
                 tool_call_id="c1", tool_name="read", content=[TextContent(text="文件内容")]
             ),
         ),
-        ModelChangeEntry(id="c", parent_id="b", model="deepseek-chat", provider="deepseek"),
+        ModelChangeEntry(id="c", parent_id="b", model="deepseek-flash", provider="deepseek"),
         LabelEntry(id="d", parent_id="c", label="重构 session 层"),
     ]
 
@@ -125,7 +125,7 @@ def test_from_entries_replays_state() -> None:
     assert isinstance(state.messages[2], ToolResultMessage)
     assert state.messages[2].tool_call_id == "c1"
     # model / label 被覆盖成最新值。
-    assert state.model == "deepseek-chat"
+    assert state.model == "deepseek-flash"
     assert state.label == "重构 session 层"
 
 
@@ -134,7 +134,7 @@ def test_from_entries_with_leaf_replays_path_only() -> None:
     entries = [
         _user_entry("root", None, "你好"),
         _user_entry("a", "root", "第一条"),
-        ModelChangeEntry(id="b", parent_id="a", model="deepseek-chat"),
+        ModelChangeEntry(id="b", parent_id="a", model="deepseek-flash"),
         LabelEntry(id="c", parent_id="b", label="标签"),
         _user_entry("d", "c", "叶子之后的消息"),
     ]
@@ -142,5 +142,5 @@ def test_from_entries_with_leaf_replays_path_only() -> None:
     # 只回放到叶子 c：后面的消息 d 不应出现。
     state = SessionState.from_entries(entries, leaf_id="c")
     assert [m.text for m in state.messages] == ["你好", "第一条"]
-    assert state.model == "deepseek-chat"
+    assert state.model == "deepseek-flash"
     assert state.label == "标签"

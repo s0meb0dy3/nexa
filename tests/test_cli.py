@@ -116,7 +116,7 @@ default_provider = "deepseek"
 
 [providers.deepseek]
 base_url = "https://api.deepseek.com"
-model = "deepseek-chat"
+model = "deepseek-flash"
 api_key = "sk-abc"
 """,
         encoding="utf-8",
@@ -124,7 +124,7 @@ api_key = "sk-abc"
 
     provider, profile = resolve_provider(config_path=config)
 
-    assert profile.model == "deepseek-chat"
+    assert profile.model == "deepseek-flash"
     assert provider.name == "deepseek"
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterable
 
 from nexa_agent.messages import AgentMessage
+from nexa_agent.provider import ThinkingLevel
 from nexa_agent.provider_events import ProviderEvent
 from nexa_agent.tools import AgentTool
 
@@ -12,10 +13,20 @@ from nexa_agent.tools import AgentTool
 class FakeProvider:
     """按调用顺序播放预先准备好的 ProviderEvent。"""
 
+    default_thinking: ThinkingLevel = "default"
+
     def __init__(self, streams: Iterable[Iterable[ProviderEvent]]) -> None:
         # 每次调用消费一组事件，便于测试多轮模型交互。
         self._streams = [list(stream) for stream in streams]
         self.calls: list[tuple[str, str, list[AgentMessage], list[AgentTool]]] = []
+
+    def thinking_options(self, model: str) -> tuple[ThinkingLevel, ...]:
+        return ("default",)
+
+    def with_thinking(self, model: str, level: ThinkingLevel) -> FakeProvider:
+        if level != "default":
+            raise ValueError(f"模型 {model} 不支持思考设置 {level}")
+        return self
 
     def stream_response(
         self,
