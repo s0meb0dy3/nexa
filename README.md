@@ -64,7 +64,7 @@ Enter executes the text in the input box.
 | --- | --- |
 | `/help` | Show commands and shortcuts. |
 | `/new` | Start a separate session, keeping the current model and old transcript. |
-| `/tree` | Choose a completed history node and continue on a branch; `/tree ID` selects it directly. Existing branches are preserved. |
+| `/tree` | Choose a complete assistant answer and continue on a branch; `/tree ID` selects it directly. Existing branches are preserved. |
 | `/resume` | Search sessions for this project; `/resume ID` opens one directly. |
 | `/usage` | Show API-measured context usage, the model limit, and percentage. |
 | `/thinking` | Show model thinking settings; `/thinking LEVEL` changes them. DeepSeek offers `off/low/high/max` and defaults to `high`. |
@@ -98,7 +98,7 @@ being yielded to the UI. Cancelling a run preserves messages already completed.
 A message write failure stops the run and requires reloading the saved session.
 
 Sessions are append-only trees. Restart restores the active root-to-node path,
-including its model and thinking settings. `/tree` lists safe message nodes across
+including its model and thinking settings. `/tree` lists complete assistant answers across
 all branches; nodes with unfinished tool calls cannot be selected. If a run was
 cancelled during a tool call, return to a safe node with `/tree` before continuing.
 Branching changes conversation history only; it does not undo files or commands.

@@ -14,7 +14,7 @@ from nexa_ai.fake import FakeProvider
 from nexa_coding.commands import completions, parse_command
 from nexa_coding.paths import NexaPaths
 from nexa_coding.tui.app import NexaTuiApp, PromptInput
-from nexa_coding.tui.dialogs import ChoiceScreen
+from nexa_coding.tui.dialogs import ChoiceScreen, TreeScreen
 
 
 def test_command_parsing():
@@ -222,8 +222,8 @@ async def test_tree_picker_switches_branch_and_restores_after_restart(tmp_path):
         await submit(app, pilot, "old branch")
         old_tip = app._session.active_leaf_id
         await submit(app, pilot, "/tree")
-        assert isinstance(app.screen, ChoiceScreen)
-        app.screen.query_one(Input).value = first_tip
+        assert isinstance(app.screen, TreeScreen)
+        app.screen.query_one(Input).value = "first"
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()

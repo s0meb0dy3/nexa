@@ -35,6 +35,51 @@ async def send(session, text):
     return [event async for event in session.prompt(text)]
 
 
+async def test_tree_summarizes_tools_and_preserves_forks(tmp_path):
+    provider = FakeProvider(
+        [
+            [
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(
+                        content=[
+                            ToolCall(id="one", name="read", arguments={"path": "missing"}),
+                            ToolCall(id="two", name="read", arguments={"path": "missing"}),
+                        ]
+                    )
+                )
+            ],
+            reply("first answer"),
+            reply("old answer"),
+            reply("new answer"),
+        ]
+    )
+    session = CodingSession.load(config(tmp_path, provider))
+    await send(session, "first question")
+    first = session.active_leaf_id
+    await send(session, "old question")
+    session.branch_to_entry(first)
+    await send(session, "new question")
+    nodes = session.branch_nodes()
+    assert [node.role for node in nodes] == [
+        "user",
+        "tools",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert nodes[1].text == "执行了 2 次工具调用"
+    assert nodes[2].parent_id == nodes[1].id
+    assert nodes[3].parent_id == nodes[5].parent_id == first
+    assert [node.text for node in nodes if node.selectable] == [
+        "first answer",
+        "old answer",
+        "new answer",
+    ]
+    assert [node.text for node in nodes if node.current] == ["new answer"]
+
+
 @pytest.mark.asyncio
 async def test_async_listener_runs_before_yield_and_sees_updated_history():
     harness = AgentHarness(AgentHarnessConfig(provider=FakeProvider([reply("answer")]), model="a"))
@@ -205,6 +250,7 @@ async def test_branch_preserves_both_paths_and_model_settings(tmp_path):
 async def test_incomplete_tool_group_cannot_branch_or_send(tmp_path):
     provider = FakeProvider(
         [
+            reply("first answer"),
             [
                 ProviderResponseEndEvent(
                     message=AssistantMessage(
@@ -219,18 +265,20 @@ async def test_incomplete_tool_group_cannot_branch_or_send(tmp_path):
     )
     cfg = config(tmp_path, provider)
     session = CodingSession.load(cfg)
+    await send(session, "first")
+    safe_tip = session.active_leaf_id
     async with aclosing(session.prompt("read")) as stream:
         async for event in stream:
             if isinstance(event, ToolExecutionEndEvent):
                 break
     entries = [e for e in cfg.storage.read_all() if isinstance(e, MessageEntry)]
-    assert dict(session.branch_choices()).keys() == {entries[0].id}
+    assert dict(session.branch_choices()).keys() == {safe_tip}
     with pytest.raises(ValueError, match="全部结果"):
         session.branch_to_entry(entries[-1].id)
     with pytest.raises(ValueError, match="/tree"):
         await send(session, "continue")
-    session.branch_to_entry(entries[0].id)
-    assert session.messages == (entries[0].message,)
+    session.branch_to_entry(safe_tip)
+    assert session.messages == (entries[0].message, entries[1].message)
 
 
 def test_legacy_leaf_and_latest_setting_replay():

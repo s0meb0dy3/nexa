@@ -1,4 +1,4 @@
-"""会话和模型共用的简单搜索选择窗口。"""
+"""会话、模型选择窗口和会话树。"""
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -6,6 +6,8 @@ from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
+
+from nexa_coding.session import BranchNode
 
 
 class ChoiceScreen(ModalScreen[str | None]):
@@ -59,3 +61,96 @@ class ChoiceScreen(ModalScreen[str | None]):
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id)
+
+
+class TreeScreen(ChoiceScreen):
+    """只在真正分叉时缩进；问题和工具摘要用于阅读，完整回答用于跳转。"""
+
+    DEFAULT_CSS = """
+    TreeScreen { align: center middle; background: #00000080; }
+    #tree-panel { width: 92%; height: 82%; padding: 1 2;
+        border: solid #38565e; background: #0d1418; }
+    #tree-title { height: 1; margin-bottom: 1; color: #79d6cf; }
+    #tree-search { height: 1; border: none; padding: 0; margin-bottom: 1;
+        background: transparent; }
+    #tree-list { height: 1fr; border: none; padding: 0; background: transparent;
+        text-wrap: nowrap; text-overflow: ellipsis; }
+    #tree-list > .option-list--option { padding: 0; }
+    #tree-list > .option-list--option-highlighted { background: #223a42; }
+    #tree-list > .option-list--option-disabled { color: #8fa5b2; }
+    #tree-help { height: 1; margin-top: 1; color: #8fa5b2; }
+    """
+
+    def __init__(self, nodes: list[BranchNode]) -> None:
+        super().__init__("会话树", [])
+        self._rows: list[tuple[str, BranchNode]] = []
+        self._questions: dict[str, str] = {}
+        children: dict[str | None, list[BranchNode]] = {}
+        for node in nodes:
+            children.setdefault(node.parent_id, []).append(node)
+
+        def walk(parent: str | None, prefix: str, question: str = "") -> None:
+            siblings = children.get(parent, [])
+            for index, node in enumerate(siblings):
+                last = index == len(siblings) - 1
+                fork = len(siblings) > 1
+                edge = ("└─ " if last else "├─ ") if fork else ""
+                self._rows.append((prefix + edge, node))
+                node_question = node.text if node.role == "user" else question
+                self._questions[node.id] = node_question
+                # 单链不增加缩进，分叉才保留连接线和分支层级。
+                continuation = ("   " if last else "│  ") if fork else ""
+                walk(node.id, prefix + continuation, node_question)
+
+        walk(None, "")
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Vertical
+
+        with Vertical(id="tree-panel"):
+            yield Static("会话树", id="tree-title")
+            yield Input(placeholder="搜索对话…", id="tree-search")
+            yield OptionList(id="tree-list", compact=True)
+            yield Static("↑↓ 选择回答 · Enter 从此处继续 · Esc 返回 · 保留其他分支", id="tree-help")
+
+    def _filter(self, query: str) -> None:
+        listing = self.query_one(OptionList)
+        listing.clear_options()
+        selected = None
+        for prefix, node in self._rows:
+            # 按问题搜索时，同时保留对应回答和工具摘要。
+            if query.casefold() not in f"{self._questions[node.id]} {node.text}".casefold():
+                continue
+            label = Text(prefix, style="#627580", no_wrap=True, overflow="ellipsis")
+            # 标记放在正文前，长回答被截断后仍能看见当前位置。
+            if node.current:
+                label.append("● 当前 · ", style="#79d6cf")
+            if node.role == "tools":
+                label.append(f"[{node.text}]", style="#627580")
+            else:
+                role = "你" if node.role == "user" else "助手"
+                color = "#79d6cf" if node.role == "user" else "#d8e2e7"
+                label.append(f"{role}：{node.text}", style=color)
+            listing.add_option(Option(label, id=node.id, disabled=not node.selectable))
+            if node.selectable and node.current:
+                selected = listing.option_count - 1
+        listing.highlighted = (
+            selected
+            if selected is not None
+            else next(
+                (
+                    i
+                    for i in range(listing.option_count)
+                    if not listing.get_option_at_index(i).disabled
+                ),
+                None,
+            )
+        )
+        self.call_after_refresh(listing.scroll_to_highlight)
+
+    def on_input_submitted(self) -> None:
+        listing = self.query_one(OptionList)
+        if listing.highlighted is not None:
+            option = listing.get_option_at_index(listing.highlighted)
+            if not option.disabled:
+                self.dismiss(option.id)

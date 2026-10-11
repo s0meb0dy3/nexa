@@ -12,11 +12,17 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, TypeGuard, cast
 
 from nexa_agent.events import AgentEndEvent, AgentEvent, MessageEndEvent
 from nexa_agent.harness import AgentHarness, AgentHarnessConfig
-from nexa_agent.messages import AgentMessage, AssistantMessage, TokenUsage, ToolResultMessage
+from nexa_agent.messages import (
+    AgentMessage,
+    AssistantMessage,
+    TokenUsage,
+    ToolResultMessage,
+    UserMessage,
+)
 from nexa_agent.provider import ModelProvider, ThinkingLevel
 from nexa_agent.session.entries import (
     Entry,
@@ -28,6 +34,7 @@ from nexa_agent.session.entries import (
 )
 from nexa_agent.session.memory import SessionState
 from nexa_agent.session.storage import JsonlStorage
+from nexa_agent.session.tree import path_to_entry
 from nexa_coding.paths import NexaPaths
 from nexa_coding.resources import NexaResourcePaths
 from nexa_coding.skills import Skill, expand_skill_command, load_skills
@@ -35,6 +42,18 @@ from nexa_coding.system_prompt import BuildSystemPromptOptions, build_system_pro
 from nexa_coding.tools import create_coding_tools
 
 DEFAULT_MODEL = "deepseek-flash"
+
+
+@dataclass(frozen=True)
+class BranchNode:
+    """会话树的显示节点；只有完整助手回答允许跳转。"""
+
+    id: str
+    parent_id: str | None
+    role: str
+    text: str
+    selectable: bool = False
+    current: bool = False
 
 
 # ── 存储接口 ─────────────────────────────────────────────────────────────────
@@ -244,30 +263,60 @@ class CodingSession:
                 pending.discard(message.tool_call_id)
         return pending
 
-    def branch_choices(self) -> list[tuple[str, str]]:
-        """显示所有分支上的安全消息节点；工具调用组中间不能继续对话。"""
+    def branch_nodes(self) -> list[BranchNode]:
+        """投影出对话树：隐藏设置记录和工具正文，保留实际父子关系。"""
+
+        def visible(entry: Entry) -> TypeGuard[MessageEntry]:
+            return isinstance(entry, MessageEntry) and (
+                isinstance(entry.message, UserMessage)
+                or isinstance(entry.message, AssistantMessage)
+                and not entry.message.tool_calls
+            )
+
+        active_path = path_to_entry(self._entries, self._active_leaf_id)
+        current = next((entry.id for entry in reversed(active_path) if visible(entry)), None)
+        nodes = []
         # shortcut: 小会话逐节点回放；长会话选择变慢时再缓存路径状态。
-        choices = []
         for entry in self._entries:
-            if isinstance(entry, MessageEntry):
-                state = SessionState.from_entries(self._entries, leaf_id=entry.id)
-                if not self._pending_tools(state.messages):
-                    preview = " ".join(entry.message.text.split())[:70] or "工具结果"
-                    indent = "  " * (len(state.messages) - 1)
-                    marker = " ← 当前" if entry.id == self._active_leaf_id else ""
-                    choices.append(
-                        (
-                            entry.id,
-                            f"{indent}• {entry.id} · {entry.message.role} · {preview}{marker}",
-                        )
-                    )
-        return choices
+            if not visible(entry):
+                continue
+            path = path_to_entry(self._entries, entry.id)
+            previous = next((i for i in range(len(path) - 2, -1, -1) if visible(path[i])), -1)
+            parent = path[previous].id if previous >= 0 else None
+            message = entry.message
+            selectable = isinstance(message, AssistantMessage) and not self._pending_tools(
+                [item.message for item in path if isinstance(item, MessageEntry)]
+            )
+            tools = sum(
+                len(item.message.tool_calls)
+                for item in path[previous + 1 : -1]
+                if isinstance(item, MessageEntry) and isinstance(item.message, AssistantMessage)
+            )
+            if tools:
+                summary_id = entry.id + "-tools"
+                nodes.append(BranchNode(summary_id, parent, "tools", f"执行了 {tools} 次工具调用"))
+                parent = summary_id
+            nodes.append(
+                BranchNode(
+                    entry.id,
+                    parent,
+                    message.role,
+                    " ".join(message.text.split()) or "（无正文）",
+                    selectable,
+                    entry.id == current,
+                )
+            )
+        return nodes
+
+    def branch_choices(self) -> list[tuple[str, str]]:
+        """界面和直接 /tree ID 使用同一条选择规则。"""
+        return [(node.id, node.text) for node in self.branch_nodes() if node.selectable]
 
     def branch_to_entry(self, entry_id: str) -> None:
         """只改变当前路径，旧分支留在账本中；后续消息接在选中节点后。"""
         self._require_idle()
         if entry_id not in {key for key, _ in self.branch_choices()}:
-            raise ValueError("请选择完整消息节点；工具调用必须已有全部结果")
+            raise ValueError("请选择完整助手回答；工具调用必须已有全部结果")
         state = SessionState.from_entries(self._entries, leaf_id=entry_id)
         provider, model, thinking = self._model_settings(self._config, state)
         self._append_entry(

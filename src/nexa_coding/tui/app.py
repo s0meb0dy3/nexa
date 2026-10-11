@@ -28,7 +28,7 @@ from nexa_coding.providers import build_provider
 from nexa_coding.session import CodingSession, CodingSessionConfig
 from nexa_coding.session_manager import SessionManager
 from nexa_coding.tui.adapter import TuiEventAdapter
-from nexa_coding.tui.dialogs import ChoiceScreen
+from nexa_coding.tui.dialogs import ChoiceScreen, TreeScreen
 from nexa_coding.tui.state import ChatItemKind, TuiState
 
 _STREAM_REFRESH_INTERVAL = 0.04
@@ -400,12 +400,11 @@ class NexaTuiApp(App):
             elif name == "tree":
                 session = self._ensure_session()
                 if not argument:
-                    choices = session.branch_choices()
-                    if not choices:
-                        raise ValueError("当前会话还没有可选择的历史消息")
-                    argument = await self.push_screen_wait(
-                        ChoiceScreen("会话树 · 从此节点继续，保留原分支", choices)
-                    )
+                    nodes = session.branch_nodes()
+                    if not any(node.selectable for node in nodes):
+                        raise ValueError("暂无完整回答可跳转；可用 /new 开始新会话")
+                    selected_entry: str | None = await self.push_screen_wait(TreeScreen(nodes))
+                    argument = selected_entry or ""
                 if argument:
                     session.branch_to_entry(argument)
                     await self._activate_session(self._session_path)

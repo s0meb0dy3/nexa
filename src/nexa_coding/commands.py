@@ -5,7 +5,7 @@ from pathlib import Path
 COMMANDS = {
     "help": "显示命令和快捷键",
     "new": "新建会话，保留旧记录",
-    "tree": "选择历史节点继续，保留原分支；也可输入 /tree ID",
+    "tree": "选择完整回答继续，保留原分支；也可输入 /tree ID",
     "resume": "选择已有会话；也可输入 /resume ID",
     "model": "选择配置中的模型；也可输入 /model 档案名",
     "thinking": "查看思考设置；/thinking 等级 修改模型思考",
