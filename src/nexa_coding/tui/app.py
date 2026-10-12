@@ -288,7 +288,7 @@ class NexaTuiApp(App):
         if command is not None:
             name, argument = command
             if self._command_busy or (
-                name in ("new", "resume", "model", "thinking", "tree", "skill")
+                name in ("new", "resume", "model", "thinking", "tree", "skill", "compact")
                 and self._state.running
             ):
                 self._state.add_tool("命令", "请等待当前任务完成，或按 Esc 取消")
@@ -346,7 +346,7 @@ class NexaTuiApp(App):
         self._item_widgets.clear()
         self._item_versions.clear()
         self._tool_outputs.clear()
-        self._state = TuiState.from_messages(session.messages)
+        self._state = TuiState.from_messages(session.transcript)
         self._adapter = TuiEventAdapter(self._state)
         self._state.usage = session.latest_usage
         self._state.add_tool("会话", f"{'新建' if fresh else '恢复'} {path.stem}")
@@ -482,6 +482,13 @@ class NexaTuiApp(App):
                     text = f"/skill:{selected_skill} "
                     editor.load_text(text)
                     editor.move_cursor((0, len(text)))
+            elif name == "compact":
+                session = self._ensure_session()
+                self._state.add_tool("上下文", "正在压缩…（Esc 取消）")
+                self._refresh()
+                await session.compact(argument)
+                self._state.usage = None
+                self._state.add_tool("上下文", "压缩完成；原始记录保留，实测占用将在下次回复后更新")
             elif name == "usage":
                 self._ensure_session()
                 self._state.add_tool(
@@ -515,9 +522,14 @@ class NexaTuiApp(App):
     async def _run_prompt(self, text: str) -> None:
         try:
             session = self._ensure_session()
+            compaction_id = session.compaction_id
             self._model = getattr(session, "model", self._model)
             self._refresh_environment()
             async for event in session.prompt(text):
+                if session.compaction_id != compaction_id:
+                    compaction_id = session.compaction_id
+                    self._state.usage = None
+                    self._state.add_tool("上下文", "已自动压缩旧历史，保留近期消息")
                 self._adapter.apply(event)
                 if isinstance(event, MessageDeltaEvent):
                     self._refresh_throttled()
@@ -546,12 +558,17 @@ class NexaTuiApp(App):
         # 退出时界面先卸载，已经排队的定时回调仍可能执行。
         if not self._view.query("#transcript"):
             return
-        if self._state.running:
+        if self._state.running or self._session and self._session.compacting:
             self._refresh()
 
     def action_cancel(self) -> None:
         if isinstance(self.screen, ChoiceScreen):
             self.screen.dismiss(None)
+            return
+        if self._session and self._session.compacting and self._command_busy:
+            self.workers.cancel_group(self, "commands")
+            self._state.add_tool("上下文", "已取消压缩，保留原历史")
+            self._refresh()
             return
         if self._current_worker is not None and not self._current_worker.is_cancelled:
             self._current_worker.cancel()
@@ -643,7 +660,9 @@ class NexaTuiApp(App):
             answer.update(RichMarkdown(text) if text else "")
             self._stream_text = text
         status = ""
-        if self._state.running:
+        if self._session and self._session.compacting:
+            status = "正在压缩上下文…（Esc 取消）"
+        elif self._state.running:
             active = next(
                 (
                     i

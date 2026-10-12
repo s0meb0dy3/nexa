@@ -254,6 +254,11 @@ flowchart LR
 末条若是消息或设置，直接以它为当前节点。这也能恢复取消时尚未写入 leaf 的完整消息。
 沿 parent_id 回到根，只回放这条路径，其他分支不会混进当前上下文。
 
+压缩追加 `CompactionEntry(summary, first_kept_entry_id)`，不删除原消息。
+`SessionState` 遇到它时将模型上下文重建为“摘要 + 保留消息”；界面仍读取原始 transcript。
+`/compact` 和自动预算检查共用 Session 的压缩方法。Harness 在每次模型请求前调用
+上下文准备入口，Loop 不负责预算或保存。摘要失败或取消时不发布新的上下文。
+
 ## 九、资源与路径：四级优先级发现
 
 - `nexa_coding/paths.py` — `NexaPaths` 唯一真相源（sessions/skills/prompts 的所有位置；

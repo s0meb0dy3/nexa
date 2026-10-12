@@ -98,6 +98,7 @@ Enter executes the text in the input box.
 | `/resume` | Search sessions for this project; `/resume ID` opens one directly. |
 | `/usage` | Show API-measured context usage, the model limit, and percentage. |
 | `/skill` | Search loaded skills and insert `/skill:name` into the input; add your request and press Enter to invoke. |
+| `/compact` | Summarize older history and keep recent messages; `/compact FOCUS` supplies summary instructions. Escape cancels. |
 | `/thinking` | Show model thinking settings; `/thinking LEVEL` changes them. DeepSeek offers `off/low/high/max` and defaults to `high`. |
 | `/model` | Choose a configured provider/model; `/model PROFILE` selects a profile directly. |
 | `/quit` | Cancel an active task, wait for cleanup, then exit. |
@@ -155,7 +156,27 @@ model = "MiniMax-M3.1-Flash-Preview"
 api_key = "your-api-key"
 ```
 
-Context usage uses the latest completed API response's `total_tokens` (input history plus output), not the sum of requests. Usage is saved with assistant messages and restored with the session. Missing usage displays `—`; unknown model limits have no percentage. This snapshot excludes content added after the measured request. `/usage` shows the definition and exact token counts. No token estimation or compression is performed.
+Context usage uses the latest completed API response's `total_tokens` (input history plus output), not the sum of requests. Usage is saved with assistant messages and restored with the session. Missing usage displays `—`; unknown model limits have no percentage. This snapshot excludes content added after the measured request. `/usage` shows the definition and exact token counts. After compaction, usage displays `—` until the next completed response measures the new context.
+
+Context compaction follows Pi's summary-plus-recent-history design. `/compact`
+works while idle. Automatic compaction checks before every model request,
+including after a complete tool batch. It reserves the larger of 16,384 tokens
+or 10% of the model window, capped at one third for small windows. It keeps about
+20,000 recent tokens, capped at one fifth of a known window, without splitting
+tool calls from their results. Unknown model limits permit manual compaction only.
+Internal budgets combine API usage with estimates for added content; estimates
+are never displayed as measured usage and cannot guarantee an exact fit.
+
+Compaction appends a summary and retained-message boundary to the JSONL tree.
+Raw history and the transcript stay intact; restarting or branching replays the
+appropriate context. Repeated compaction combines the previous summary with
+new older history. Failed, cancelled, empty, oversized, or ineffective summaries
+leave the context unchanged; automatic failure stops the run instead of sending
+an oversized request. A single oversized input or tool group may require reducing
+the content rather than compaction. Summary requests use no tools.
+Normal requests append to a stable prefix; summaries change only on successful
+compaction. Compaction changes the message prefix, so cache reuse may decrease
+temporarily; provider cache hits are not guaranteed.
 
 Completed user, assistant, and tool messages are saved by a Harness listener before
 being yielded to the UI. Cancelling a run preserves messages already completed.

@@ -14,6 +14,7 @@ COMMANDS = {
     "thinking": "查看思考设置；/thinking 等级 修改模型思考",
     "usage": "查看 API 实测上下文与模型上限",
     "skill": "搜索选择技能；/skill:名称 请求 调用技能",
+    "compact": "压缩旧历史，保留近期消息；可附加总结重点",
     "quit": "等待取消清理后退出",
 }
 

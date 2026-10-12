@@ -8,6 +8,7 @@ CodingSession 是"可续聊的 coding agent"入口：
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from nexa_agent.messages import (
 )
 from nexa_agent.provider import ModelProvider, ThinkingLevel
 from nexa_agent.session.entries import (
+    CompactionEntry,
     Entry,
     LeafEntry,
     MessageEntry,
@@ -35,6 +37,7 @@ from nexa_agent.session.entries import (
 from nexa_agent.session.memory import SessionState
 from nexa_agent.session.storage import JsonlStorage
 from nexa_agent.session.tree import path_to_entry
+from nexa_coding.compaction import SUMMARY_SYSTEM, cut_point, estimate_tokens, serialize_history
 from nexa_coding.paths import NexaPaths
 from nexa_coding.resources import NexaResourcePaths
 from nexa_coding.skills import Skill, expand_skill_command, load_skills
@@ -140,6 +143,9 @@ class CodingSession:
         self._active_leaf_id = active_leaf_id
         self._save_failed = False
         self._harness.subscribe(self)
+        self._harness.context_preparer = self._prepare_context
+        self.compacting = False
+        self._compaction_id: str | None = None
         # 自增计数器，保证每个条目 id 唯一。
         self._id_counter = self._next_id_from_entries(self._entries)
         # 已加载的技能，prompt 里可触发 /skill:name。
@@ -215,6 +221,7 @@ class CodingSession:
             active_leaf_id=state.active_leaf_id or entries[-1].id,
             skills=skills,
         )
+        session._compaction_id = state.compaction.id if state.compaction else None
         session._thinking = thinking
         session.thinking_notice = (
             f"模型 {model} 不支持 {requested}，思考已切换为 {thinking}"
@@ -246,6 +253,8 @@ class CodingSession:
         return provider.with_thinking(model, thinking), model, thinking
 
     def _require_idle(self) -> None:
+        if self.compacting:
+            raise RuntimeError("正在压缩上下文，请先等待或取消")
         if self._harness.is_running:
             raise RuntimeError("运行中不能修改会话，请先结束当前任务")
         if self._save_failed:
@@ -328,6 +337,7 @@ class CodingSession:
         self._harness.select_model(provider, model)
         self._harness.replace_messages(state.messages)
         self._provider, self._thinking = provider, thinking
+        self._compaction_id = state.compaction.id if state.compaction else None
 
     # ── 对外 API ─────────────────────────────────────────────────────────────
 
@@ -387,21 +397,147 @@ class CodingSession:
     @property
     def latest_usage(self) -> TokenUsage | None:
         """查找当前模型最近一次完整响应的实测值，恢复时复用消息账本。"""
+        path = path_to_entry(self._entries, self._active_leaf_id)
+        start = next(
+            (i + 1 for i in reversed(range(len(path))) if isinstance(path[i], CompactionEntry)), 0
+        )
         return next(
             (
-                message.usage
-                for message in reversed(self.messages)
-                if isinstance(message, AssistantMessage)
-                and message.usage is not None
-                and message.usage.model == self.model
+                entry.message.usage
+                for entry in reversed(path[start:])
+                if isinstance(entry, MessageEntry)
+                and isinstance(entry.message, AssistantMessage)
+                and entry.message.usage is not None
+                and entry.message.usage.model == self.model
             ),
             None,
         )
 
     @property
+    def compaction_id(self) -> str | None:
+        return self._compaction_id
+
+    def _budget(self) -> tuple[int, int]:
+        # 未知上限仍允许手动压缩；已知模型留出输出与新增内容空间。
+        limit = self.provider.context_window(self.model)
+        reserve = min(limit // 3, max(16384, limit // 10)) if limit else 16384
+        return (limit - reserve if limit else 0), (min(20000, limit // 5) if limit else 20000)
+
+    def _fixed_tokens(self) -> int:
+        definitions = [
+            {"name": t.name, "description": t.description, "parameters": t.parameters}
+            for t in self._harness.tools
+        ]
+        return estimate_tokens(
+            [
+                UserMessage(
+                    content=self._harness.system + json.dumps(definitions, ensure_ascii=False)
+                )
+            ]
+        )
+
+    async def _prepare_context(self, messages: list[AgentMessage]) -> list[AgentMessage]:
+        threshold, _ = self._budget()
+        if not threshold:
+            return messages
+        used = self._fixed_tokens() + estimate_tokens(messages)
+        usage = self.latest_usage
+        if usage:
+            index = next(
+                i
+                for i, message in reversed(list(enumerate(messages)))
+                if isinstance(message, AssistantMessage) and message.usage is usage
+            )
+            used = max(used, usage.total_tokens + estimate_tokens(messages[index + 1 :]))
+        if used >= threshold:
+            await self._compact("")
+            return list(self.messages)
+        return messages
+
+    async def compact(self, instructions: str = "") -> str:
+        """主动压缩只能在空闲时执行；自动入口仅在完整工具批次后调用。"""
+        self._require_idle()
+        return await self._compact(instructions)
+
+    async def _compact(self, instructions: str) -> str:
+        if self._save_failed:
+            raise RuntimeError("会话保存失败，请先重新加载")
+        state = SessionState.from_entries(self._entries, leaf_id=self._active_leaf_id)
+        threshold, keep = self._budget()
+        # 重复压缩至少合并一条真实消息，不能只改写独立的旧摘要。
+        cut = cut_point(state.messages, keep, minimum=2 if state.compaction else 1)
+        # 不能只重新总结旧摘要，否则空间不会释放。
+        if not any(state.message_ids[:cut]):
+            raise ValueError("暂无新增历史可压缩")
+        request = UserMessage(
+            content="历史记录：\n"
+            + serialize_history(state.messages[:cut])
+            + "\n总结重点："
+            + instructions
+        )
+        if (
+            threshold
+            and estimate_tokens([UserMessage(content=SUMMARY_SYSTEM), request]) >= threshold
+        ):
+            raise ValueError("待总结内容仍超过上下文预算，请减少单条输入或工具输出")
+        self.compacting = True
+        try:
+            summary = None
+            async with aclosing(
+                self.provider.stream_response(
+                    model=self.model, system=SUMMARY_SYSTEM, messages=[request], tools=[]
+                )
+            ) as stream:
+                async for event in stream:
+                    if event.type == "error":
+                        raise RuntimeError(event.message)
+                    if event.type == "response_end":
+                        if event.message.tool_calls or event.finish_reason in (
+                            "length",
+                            "max_tokens",
+                        ):
+                            raise ValueError("摘要响应未完整完成")
+                        summary = event.message.text.strip()
+            if not summary:
+                raise ValueError("模型未返回完整摘要")
+            projected = [UserMessage(content="历史任务摘要：\n" + summary), *state.messages[cut:]]
+            size = self._fixed_tokens() + estimate_tokens(projected)
+            if (
+                size >= self._fixed_tokens() + estimate_tokens(state.messages)
+                or threshold
+                and size >= threshold
+            ):
+                raise ValueError("压缩未释放足够上下文，保留原历史")
+            kept_id = state.message_ids[cut]
+            assert kept_id is not None
+            # 摘要和边界先落盘，成功后才发布新的模型上下文。
+            self._append_entry(
+                CompactionEntry(
+                    id=self._new_id("compact"),
+                    parent_id=self._active_leaf_id,
+                    summary=summary,
+                    first_kept_entry_id=kept_id,
+                )
+            )
+            self._harness.replace_messages(projected)
+            self._compaction_id = self._active_leaf_id
+            return summary
+        finally:
+            self.compacting = False
+
+    @property
     def messages(self) -> tuple[AgentMessage, ...]:
-        """当前会话历史（只读）。"""
+        """当前发给模型的有效上下文（只读）。"""
         return self._harness.messages
+
+    @property
+    def transcript(self) -> tuple[AgentMessage, ...]:
+        """当前分支的原始消息用于显示，不受压缩影响。"""
+        return tuple(
+            entry.message
+            for entry in path_to_entry(self._entries, self._active_leaf_id)
+            if isinstance(entry, MessageEntry)
+        )
 
     async def prompt(self, text: str) -> AsyncGenerator[AgentEvent, None]:
         """展开技能后运行；完整消息由监听器保存，不依赖界面消费到结尾。"""

@@ -11,6 +11,7 @@
 
 from nexa_agent.session.entries import (
     BaseEntry,
+    CompactionEntry,
     Entry,
     LabelEntry,
     LeafEntry,
@@ -26,6 +27,7 @@ from nexa_agent.session.tree import path_to_entry
 
 __all__ = [
     "BaseEntry",
+    "CompactionEntry",
     "Entry",
     "JsonlStorage",
     "LabelEntry",

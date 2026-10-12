@@ -38,10 +38,21 @@ class AgentHarness:
         self._listeners: list[EventListener] = []
         self._is_running = False
         self._cancel_requested = False
+        self.context_preparer: (
+            Callable[[list[AgentMessage]], Awaitable[list[AgentMessage]]] | None
+        ) = None
 
     @property
     def model(self) -> str:
         return self._config.model
+
+    @property
+    def system(self) -> str:
+        return self._config.system
+
+    @property
+    def tools(self) -> tuple[AgentTool, ...]:
+        return self._config.tools
 
     @property
     def messages(self) -> tuple[AgentMessage, ...]:
@@ -93,6 +104,12 @@ class AgentHarness:
             if isawaitable(result):
                 await result
 
+    async def _prepare_context(self, messages: list[AgentMessage]) -> list[AgentMessage]:
+        if self.context_preparer is not None:
+            messages = await self.context_preparer(messages)
+            self._messages = list(messages)
+        return messages
+
     async def _run_loop(
         self, user_message: UserMessage | None = None
     ) -> AsyncGenerator[AgentEvent, None]:
@@ -113,6 +130,7 @@ class AgentHarness:
                     system=self._config.system,
                     messages=self._messages,
                     tools=list(self._config.tools),
+                    prepare_context=self._prepare_context,
                 )
             ) as stream:
                 async for event in stream:

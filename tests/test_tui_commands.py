@@ -12,6 +12,7 @@ from nexa_agent.session.memory import SessionState
 from nexa_agent.session.storage import JsonlStorage
 from nexa_ai.fake import FakeProvider
 from nexa_coding.commands import completions, parse_command
+from nexa_coding.compaction import SUMMARY_SYSTEM
 from nexa_coding.paths import NexaPaths
 from nexa_coding.tui.app import NexaTuiApp, PromptInput
 from nexa_coding.tui.dialogs import ChoiceScreen, TreeScreen
@@ -45,6 +46,47 @@ async def submit(app, pilot, text):
     editor.load_text(text)
     await pilot.press("enter")
     await pilot.pause()
+
+
+async def test_compact_command_and_escape(tmp_path):
+    started = asyncio.Event()
+
+    class Provider(FakeProvider):
+        async def stream_response(self, **kwargs):
+            if kwargs["system"] == SUMMARY_SYSTEM and self.waiting:
+                started.set()
+                await asyncio.Event().wait()
+            async for event in super().stream_response(**kwargs):
+                yield event
+
+    fake = Provider(
+        [
+            [ProviderResponseEndEvent(message=AssistantMessage(content=text))]
+            for text in ("回答", "摘要", "第二个回答")
+        ]
+    )
+    fake.waiting = False
+    paths = NexaPaths(home=tmp_path / "home", agents_home=tmp_path / "agents")
+    app = NexaTuiApp(fake, model="test", cwd=tmp_path, paths=paths)
+    async with app.run_test() as pilot:
+        await submit(app, pilot, "问题" * 2000)
+        await submit(app, pilot, "/compact 保留测试结果")
+        assert app._session.compaction_id
+        assert app._state.usage is None
+        assert "压缩完成" in app._state.chat_items[-1].text
+        assert "保留测试结果" in fake.calls[1][2][0].text
+        await submit(app, pilot, "新问题" * 3000)
+        before = app._session._storage.read_all()
+        fake.waiting = True
+        await submit(app, pilot, "/compact")
+        await asyncio.wait_for(started.wait(), 2)
+        assert app._session.compacting
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not app._session.compacting
+        assert not app._command_busy
+        assert app._session._storage.read_all() == before
+        assert "已取消压缩" in app._state.chat_items[-1].text
 
 
 async def test_skill_picker_completion_and_explicit_invocation(tmp_path):
@@ -212,6 +254,8 @@ async def test_exit_waits_for_cleanup_and_blocks_switching(tmp_path, monkeypatch
         provider = FakeProvider([])
         thinking = "default"
         latest_usage = None
+        compacting = False
+        compaction_id = None
         model = "test"
 
         async def prompt(self, text):

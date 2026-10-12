@@ -31,7 +31,9 @@ class BaseEntry(WireModel):
     # parent_id 指向它的"前一条"，从而把条目串成树。
     parent_id: str | None = None
     # 判别字段：type="message" → MessageEntry，依此类推。
-    type: Literal["message", "model_change", "label", "session_info", "leaf", "thinking_change"]
+    type: Literal[
+        "message", "model_change", "label", "session_info", "leaf", "thinking_change", "compaction"
+    ]
 
 
 # ── 消息条目 ─────────────────────────────────────────────────────────────────
@@ -73,6 +75,14 @@ class ThinkingChangeEntry(BaseEntry):
 
     type: Literal["thinking_change"] = "thinking_change"
     thinking: ThinkingLevel
+
+
+class CompactionEntry(BaseEntry):
+    """原始消息不删除；摘要和保留起点决定后续发给模型的上下文。"""
+
+    type: Literal["compaction"] = "compaction"
+    summary: str
+    first_kept_entry_id: str
 
 
 # ── 标签条目 ─────────────────────────────────────────────────────────────────
@@ -123,6 +133,7 @@ type Entry = Annotated[
     MessageEntry
     | ModelChangeEntry
     | ThinkingChangeEntry
+    | CompactionEntry
     | LabelEntry
     | SessionInfoEntry
     | LeafEntry,
@@ -131,6 +142,7 @@ type Entry = Annotated[
 
 __all__ = [
     "BaseEntry",
+    "CompactionEntry",
     "Entry",
     "LabelEntry",
     "LeafEntry",

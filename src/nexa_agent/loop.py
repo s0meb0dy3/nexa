@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
 
 from nexa_agent.events import (
@@ -49,6 +49,8 @@ class AgentLoop:
         system: str,
         messages: list[AgentMessage],
         tools: list[AgentTool],
+        prepare_context: Callable[[list[AgentMessage]], Awaitable[list[AgentMessage]]]
+        | None = None,
     ) -> AsyncGenerator[AgentEvent, None]:
         """主循环：管理轮次，协调模型调用和工具执行。"""
 
@@ -60,6 +62,9 @@ class AgentLoop:
 
         # 不限制模型轮次或工具次数；最终回答结束循环，取消向上传播。
         while True:
+            # 应用在请求前准备上下文；核心不关心摘要、磁盘或预算策略。
+            if prepare_context is not None:
+                history = await prepare_context(history)
             # 通知外部：新一轮开始。
             yield TurnStartEvent()
 

@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from nexa_agent.messages import AgentMessage
+from nexa_agent.messages import AgentMessage, UserMessage
 from nexa_agent.provider import ThinkingLevel
 from nexa_agent.session.entries import (
+    CompactionEntry,
     Entry,
     LabelEntry,
     LeafEntry,
@@ -41,6 +42,8 @@ class SessionState:
     thinking: ThinkingLevel = "default"
     label: str | None = None
     active_leaf_id: str | None = None
+    message_ids: list[str | None] = field(default_factory=list)
+    compaction: CompactionEntry | None = None
 
     @classmethod
     def from_entries(cls, entries: list[Entry], *, leaf_id: str | None = None) -> SessionState:
@@ -67,6 +70,16 @@ class SessionState:
             if isinstance(entry, MessageEntry):
                 # 消息条目直接取出内嵌的 AgentMessage，原样追加。
                 state.messages.append(entry.message)
+                state.message_ids.append(entry.id)
+            elif isinstance(entry, CompactionEntry):
+                # 仅重建当前路径的投影；压缩前的节点仍可恢复完整历史。
+                start = state.message_ids.index(entry.first_kept_entry_id)
+                state.messages = [
+                    UserMessage(content="历史任务摘要：\n" + entry.summary),
+                    *state.messages[start:],
+                ]
+                state.message_ids = [None, *state.message_ids[start:]]
+                state.compaction = entry
             elif isinstance(entry, ModelChangeEntry):
                 # 模型切换条目：账本只记新状态，回放时覆盖当前模型。
                 state.model = entry.model

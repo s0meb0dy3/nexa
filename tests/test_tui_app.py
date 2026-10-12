@@ -38,6 +38,8 @@ async def test_worker_failure_resets_ui(tmp_path, monkeypatch, load_fails):
         provider = FakeProvider([])
         thinking = "default"
         latest_usage = None
+        compacting = False
+        compaction_id = None
 
         async def prompt(self, text):
             yield AgentStartEvent()
@@ -73,6 +75,8 @@ async def test_worker_cancellation_waits_for_cleanup(tmp_path, monkeypatch):
         provider = FakeProvider([])
         thinking = "default"
         latest_usage = None
+        compacting = False
+        compaction_id = None
 
         async def prompt(self, text):
             yield AgentStartEvent()
@@ -117,6 +121,8 @@ async def test_multiline_input_preserves_draft_while_running(tmp_path, monkeypat
         provider = FakeProvider([])
         thinking = "default"
         latest_usage = None
+        compacting = False
+        compaction_id = None
         model = "restored-model"
 
         async def prompt(self, text):
