@@ -14,7 +14,7 @@ from nexa_agent.messages import AgentMessage
 from nexa_agent.provider_events import ProviderEvent
 from nexa_agent.tools import AgentTool
 
-type ThinkingLevel = Literal["default", "off", "on", "low", "medium", "high", "max"]
+type ThinkingLevel = Literal["default", "off", "on", "low", "medium", "high", "xhigh", "max"]
 
 
 class ModelProvider(Protocol):

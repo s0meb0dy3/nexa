@@ -36,6 +36,32 @@ model = "deepseek-flash"
 api_key = "your-api-key"
 ```
 
+To use the Anthropic Messages protocol, add a separate profile with
+`api = "anthropic"`. Keep the OpenAI profiles if you want to switch protocols:
+
+```toml
+[providers.minimax_anthropic]
+api = "anthropic"
+base_url = "https://api.minimax.cn/anthropic"
+model = "MiniMax-M3.1-Flash-Preview"
+api_key = "your-minimax-api-key"
+
+[providers.deepseek_anthropic]
+api = "anthropic"
+base_url = "https://api.deepseek.com/anthropic"
+model = "deepseek-flash"
+api_key = "your-deepseek-api-key"
+```
+
+Select with `/model minimax_anthropic` or `/model deepseek_anthropic`.
+The provider appends `/v1/messages` to `base_url`, preserves thinking signatures
+and tool results, and includes cached input tokens in context usage. It reuses
+the same vendor thinking levels and context limits as the OpenAI adapters.
+Other Anthropic endpoints expose `default` thinking and an unknown context limit.
+The current implementation supports text, thinking, and tool-use blocks; image
+and redacted-thinking blocks are not supported. The output limit is 8,192 tokens
+per request, including thinking.
+
 To install the global command from this source checkout:
 
 ```bash
@@ -89,7 +115,20 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-Thinking settings are saved with the session and inherited by `/new`. Changes require an idle agent. Ctrl+T only expands/hides reasoning text. DeepSeek supports `deepseek-flash` and `deepseek-v4-pro`, with `off/low/high/max` (default: `high`). Other providers currently expose only `default`. Unsupported settings are rejected; switching to an incompatible model resets to the new provider’s default with a notice.
+Thinking settings are saved with the session and inherited by `/new`. Changes require an idle agent. Ctrl+T only expands/hides reasoning text. DeepSeek supports `deepseek-flash` and `deepseek-v4-pro`, with `off/low/high/max` (default: `high`). Providers without a dedicated adapter expose only `default`. Unsupported settings are rejected; switching to an incompatible model resets to the new provider’s default with a notice.
+
+MiniMax supports `MiniMax-M3.1-Flash-Preview` with `low/medium/high/xhigh/max`
+(default: `max`; thinking cannot be disabled). Profiles using `api.minimax.cn`
+or `api.minimax.io` select the MiniMax adapter automatically. It preserves
+`reasoning_content` in assistant history for tool continuations and reports the
+official 1,000,000-token context limit. Add a profile and select it with `/model minimax`:
+
+```toml
+[providers.minimax]
+base_url = "https://api.minimax.cn/v1"
+model = "MiniMax-M3.1-Flash-Preview"
+api_key = "your-api-key"
+```
 
 Context usage uses the latest completed API response's `total_tokens` (input history plus output), not the sum of requests. Usage is saved with assistant messages and restored with the session. Missing usage displays `—`; unknown model limits have no percentage. This snapshot excludes content added after the measured request. `/usage` shows the definition and exact token counts. No token estimation or compression is performed.
 

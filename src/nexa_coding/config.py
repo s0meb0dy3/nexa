@@ -51,7 +51,7 @@ class ProviderProfile:
         base_url: API 根地址。
         model: 默认模型名。
         api_key: 访问凭证。
-        api: 协议类型；目前只实现 "openai"（OpenAI 兼容协议）。
+        api: 协议类型："openai"（Chat Completions）或 "anthropic"（Messages）。
     """
 
     name: str
