@@ -139,7 +139,7 @@ class AgentLoop:
         # 开始输出：先发空消息，让下游可以准备流式缓冲。
         yield MessageStartEvent(message=AssistantMessage())
 
-        # 遍历 Provider 事件流：增量实时转发，完整消息与错误留到最后。
+        # 增量实时转发，完整消息在结尾交付，错误立即向上传播。
         final_message: AssistantMessage | None = None
 
         # 提前关闭上层事件流时，也立即关闭底层 HTTP 流。
@@ -152,12 +152,8 @@ class AgentLoop:
                     # 模型响应结束，携带完整的助手消息。
                     final_message = event.message
                 elif event.type == "error":
-                    # 模型报错时，构造一个包含错误信息的助手消息。
-                    final_message = AssistantMessage(
-                        content=[
-                            TextContent(text=f"错误: {event.message or 'Provider 未提供错误详情'}")
-                        ]
-                    )
+                    # 失败交给运行边界报告，不能保存成模型的完整回答。
+                    raise RuntimeError(event.message or "Provider 未提供错误详情")
 
         if final_message is None:
             raise RuntimeError("模型响应没有完整的结束消息")

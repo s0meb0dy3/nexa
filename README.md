@@ -160,6 +160,10 @@ Context usage uses the latest completed API response's `total_tokens` (input his
 Completed user, assistant, and tool messages are saved by a Harness listener before
 being yielded to the UI. Cancelling a run preserves messages already completed.
 A message write failure stops the run and requires reloading the saved session.
+API failures are reported as runtime errors, not saved as assistant replies.
+The OpenAI-compatible adapter requires both a finish reason and `[DONE]` before
+committing a response; malformed stream data or tool arguments fail the run.
+Previously completed messages and tool results remain available after failure.
 
 Sessions are append-only trees. Restart restores the active root-to-node path,
 including its model and thinking settings. `/tree` lists complete assistant answers across

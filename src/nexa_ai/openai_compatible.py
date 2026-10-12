@@ -153,6 +153,7 @@ class OpenAICompatibleProvider:
                     text_buffer = ""
                     usage = None
                     finish_reason = None
+                    received_done = False
                     # 推理内容单独累积（DeepSeek 的 reasoning_content / Ollama 的 reasoning）。
                     reasoning_buffer = ""
                     # 用字典暂存工具调用的各个部分，key 是工具在列表中的索引。
@@ -166,6 +167,7 @@ class OpenAICompatibleProvider:
 
                         # [DONE] 表示流式传输结束。
                         if event == "[DONE]":
+                            received_done = True
                             break
 
                         # 统计块可能只有 usage、choices=[]，必须先读取统计。
@@ -218,6 +220,10 @@ class OpenAICompatibleProvider:
                                 if args_chunk:
                                     tool_buffers[idx]["arguments"] += args_chunk
 
+                    # 连接关闭不代表回答完成；完整协议结束后才能保存消息。
+                    if not received_done or finish_reason is None:
+                        raise ValueError("模型流未正常结束，响应不完整")
+
                     # 流结束后，先放思考块（推理发生在正文之前），再放正文。
                     if reasoning_buffer:
                         content_blocks.append(ThinkingContent(text=reasoning_buffer))
@@ -229,11 +235,8 @@ class OpenAICompatibleProvider:
                     # 把暂存的工具调用转成 ToolCall 对象。
                     for idx in sorted(tool_buffers):
                         buf = tool_buffers[idx]
-                        # 尝试解析 JSON 参数；如果解析失败，使用空字典。
-                        try:
-                            arguments = json.loads(buf["arguments"]) if buf["arguments"] else {}
-                        except json.JSONDecodeError:
-                            arguments = {}
+                        # 无效参数必须报错，不能用空字典继续执行工具。
+                        arguments = json.loads(buf["arguments"])
                         content_blocks.append(
                             ToolCall(
                                 id=buf["id"] or str(uuid.uuid4()),
@@ -249,11 +252,11 @@ class OpenAICompatibleProvider:
                         finish_reason=finish_reason,
                     )
 
-            except httpx.HTTPError as e:
-                # 网络层面的错误（超时、连接失败等）。
+            except (httpx.HTTPError, ValueError) as e:
+                # 网络或协议失败只发错误事件，不交付不完整消息。
                 # 部分 httpx 异常（例如连接被对端提前关闭）没有错误文本。
-                message = str(e) or f"{type(e).__name__}（未提供详情）"
-                yield ProviderErrorEvent(message=message)
+                error_message = str(e) or f"{type(e).__name__}（未提供详情）"
+                yield ProviderErrorEvent(message=error_message)
 
     @staticmethod
     def _reasoning_delta(delta: dict) -> str:
@@ -290,10 +293,7 @@ class OpenAICompatibleProvider:
         if data_str == "[DONE]":
             return "[DONE]"
 
-        try:
-            return json.loads(data_str)
-        except json.JSONDecodeError:
-            return None
+        return json.loads(data_str)
 
     @staticmethod
     def _convert_messages(system: str, messages: list[AgentMessage]) -> list[dict]:

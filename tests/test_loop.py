@@ -255,7 +255,7 @@ async def test_loop_has_no_turn_or_tool_count_limit():
 
 @pytest.mark.asyncio
 async def test_loop_provider_error():
-    """Provider 返回错误时，应该把错误转成助手消息。"""
+    """Provider 失败向上传播，不生成完整助手消息或正常结束事件。"""
 
     # 准备：Provider 返回一个错误
     provider = FakeProvider(
@@ -267,18 +267,11 @@ async def test_loop_provider_error():
     )
 
     agent = AgentLoop(provider)
-    events = await _collect_events(agent, tools=[])
-
-    # 验证：只有 1 轮（错误后直接结束）
-    turn_starts = [e for e in events if isinstance(e, TurnStartEvent)]
-    assert len(turn_starts) == 1
-
-    # 验证：最终消息中包含错误信息
-    end_event = events[-1]
-    assert isinstance(end_event, AgentEndEvent)
-    assistant_msgs = [m for m in end_event.messages if isinstance(m, AssistantMessage)]
-    assert "错误" in assistant_msgs[-1].text
-    assert "网络连接失败" in assistant_msgs[-1].text
+    events = []
+    with pytest.raises(RuntimeError, match="网络连接失败"):
+        async for event in agent.run(model="test", system="", messages=[], tools=[]):
+            events.append(event)
+    assert not any(isinstance(e, (MessageEndEvent, AgentEndEvent)) for e in events)
 
 
 @pytest.mark.asyncio

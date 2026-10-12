@@ -7,6 +7,16 @@ from nexa_coding.session import BranchNode
 from nexa_coding.tui.dialogs import TreeScreen
 
 
+def test_long_linear_tree_does_not_use_recursion():
+    nodes = [
+        BranchNode(str(i), str(i - 1) if i else None, "assistant", "回答", True)
+        for i in range(2000)
+    ]
+    screen = TreeScreen(nodes)
+    assert [node.id for _, node in screen._rows] == [node.id for node in nodes]
+    assert all(prefix == "" for prefix, _ in screen._rows)
+
+
 async def test_tree_layout_search_and_selection():
     nodes = [
         BranchNode("q1", None, "user", "介绍项目"),

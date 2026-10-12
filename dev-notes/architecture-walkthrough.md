@@ -192,7 +192,7 @@ flowchart LR
 - `openai_compatible.py` `_stream()` — HTTP SSE 逐块解析：
   - `_stream()` 累积 `text_delta`（同时攒进 buffer）
   - `_stream()` 响应结束时用攒好的内容构造 `ProviderResponseEndEvent(message=...)`
-- 错误统一转成 `ProviderErrorEvent`（loop 层再转成 `错误: ...` 的助手消息）
+- 错误统一转成 `ProviderErrorEvent`（loop 层抛出运行错误，由界面报告，不保存成助手消息）
 - `nexa_ai/fake.py` — `FakeProvider` 按脚本回放事件，**全部测试都靠它，不碰网络**
 
 ## 七、呈现：TUI 消费事件流

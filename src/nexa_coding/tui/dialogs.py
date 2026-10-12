@@ -89,20 +89,27 @@ class TreeScreen(ChoiceScreen):
         for node in nodes:
             children.setdefault(node.parent_id, []).append(node)
 
-        def walk(parent: str | None, prefix: str, question: str = "") -> None:
+        stack: list[tuple[BranchNode, str, str, str]] = []
+
+        def push_children(parent: str | None, prefix: str, question: str) -> None:
             siblings = children.get(parent, [])
-            for index, node in enumerate(siblings):
+            # 栈后进先出，倒序放入以保持原来的深度优先显示顺序。
+            for index in reversed(range(len(siblings))):
+                node = siblings[index]
                 last = index == len(siblings) - 1
                 fork = len(siblings) > 1
                 edge = ("└─ " if last else "├─ ") if fork else ""
-                self._rows.append((prefix + edge, node))
-                node_question = node.text if node.role == "user" else question
-                self._questions[node.id] = node_question
                 # 单链不增加缩进，分叉才保留连接线和分支层级。
                 continuation = ("   " if last else "│  ") if fork else ""
-                walk(node.id, prefix + continuation, node_question)
+                stack.append((node, prefix + edge, prefix + continuation, question))
 
-        walk(None, "")
+        push_children(None, "", "")
+        while stack:
+            node, label_prefix, child_prefix, question = stack.pop()
+            self._rows.append((label_prefix, node))
+            node_question = node.text if node.role == "user" else question
+            self._questions[node.id] = node_question
+            push_children(node.id, child_prefix, node_question)
 
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical

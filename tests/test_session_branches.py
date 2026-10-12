@@ -8,7 +8,7 @@ import pytest
 from nexa_agent.events import MessageEndEvent, ToolExecutionEndEvent
 from nexa_agent.harness import AgentHarness, AgentHarnessConfig
 from nexa_agent.messages import AssistantMessage, ToolCall, ToolResultMessage, UserMessage
-from nexa_agent.provider_events import ProviderResponseEndEvent
+from nexa_agent.provider_events import ProviderErrorEvent, ProviderResponseEndEvent
 from nexa_agent.session.entries import LeafEntry, MessageEntry
 from nexa_agent.session.memory import SessionState
 from nexa_agent.session.storage import JsonlStorage
@@ -33,6 +33,35 @@ def config(tmp_path, provider):
 
 async def send(session, text):
     return [event async for event in session.prompt(text)]
+
+
+async def test_api_failure_keeps_saved_tool_result_and_can_continue(tmp_path):
+    provider = FakeProvider(
+        [
+            [
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(
+                        content=[ToolCall(id="read", name="read", arguments={"path": "missing"})]
+                    )
+                )
+            ],
+            [ProviderErrorEvent(message="网络失败")],
+        ]
+    )
+    cfg = config(tmp_path, provider)
+    session = CodingSession.load(cfg)
+    with pytest.raises(RuntimeError, match="网络失败"):
+        await send(session, "读取文件")
+    assert not session._harness.is_running
+    assert [m.role for m in session.messages] == ["user", "assistant", "toolResult"]
+    assert not any(isinstance(entry, LeafEntry) for entry in cfg.storage.read_all())
+    assert not session.branch_choices()
+    cfg.provider = FakeProvider([reply("恢复完成")])
+    restored = CodingSession.load(cfg)
+    async for _ in restored.continue_():
+        pass
+    assert isinstance(cfg.provider.calls[0][2][-1], ToolResultMessage)
+    assert restored.messages[-1].text == "恢复完成"
 
 
 async def test_tree_summarizes_tools_and_preserves_forks(tmp_path):
