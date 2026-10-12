@@ -93,6 +93,7 @@ Enter executes the text in the input box.
 | `/tree` | Choose a complete assistant answer and continue on a branch; `/tree ID` selects it directly. Existing branches are preserved. |
 | `/resume` | Search sessions for this project; `/resume ID` opens one directly. |
 | `/usage` | Show API-measured context usage, the model limit, and percentage. |
+| `/skill` | Search loaded skills and insert `/skill:name` into the input; add your request and press Enter to invoke. |
 | `/thinking` | Show model thinking settings; `/thinking LEVEL` changes them. DeepSeek offers `off/low/high/max` and defaults to `high`. |
 | `/model` | Choose a configured provider/model; `/model PROFILE` selects a profile directly. |
 | `/quit` | Cancel an active task, wait for cleanup, then exit. |
@@ -106,6 +107,26 @@ through to the agent. Model selection uses profiles from `~/.nexa/config.toml`
 and does not fetch a remote model catalog.
 
 ## Development
+
+Skills load from `~/.nexa/skills/`, `~/.agents/skills/`, `<cwd>/.nexa/skills/`,
+and `<cwd>/.agents/skills/`, in that order; later sources override matching names.
+Use `<name>/SKILL.md` (or `<name>.md`) with a description in frontmatter:
+
+```markdown
+---
+description: Review code changes and check relevant tests
+---
+Read the changes, identify bugs, and run the relevant tests.
+```
+
+Invoke with `/skill:review Check these changes`. Tab completes skill names.
+The picker only fills the draft; it does not call the model. Unknown names show
+an error. The system prompt includes skill indexes, and instructs the model to
+read matching skills on demand. Explicit invocation supplies the full skill text
+and its directory for resolving relative references. The `read` tool also permits
+loaded skill directories, including reference files; `write` and `edit` retain
+their project-only scope. This is not a sandbox for shell commands.
+Restart NEXA after changing skill files; there is no hot reload.
 
 ```bash
 uv sync --dev

@@ -94,6 +94,7 @@ async def test_multiline_input_preserves_draft_while_running(tmp_path, monkeypat
     done = asyncio.Event()
 
     class Session:
+        skills = []
         provider = FakeProvider([])
         thinking = "default"
         latest_usage = None

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from nexa_agent.messages import AssistantMessage, TextContent
+from nexa_agent.messages import AssistantMessage, TextContent, ToolCall
 from nexa_agent.provider_events import ProviderResponseEndEvent, ProviderResponseStartEvent
 from nexa_agent.session.entries import Entry
 from nexa_ai.fake import FakeProvider
@@ -14,6 +14,56 @@ from nexa_coding.paths import NexaPaths
 from nexa_coding.resources import NexaResourcePaths, ResourceError, parse_markdown_resource
 from nexa_coding.session import CodingSession, CodingSessionConfig
 from nexa_coding.skills import Skill, build_skill_index, expand_skill_command, load_skills
+
+
+async def test_session_can_read_global_skill_and_reference(tmp_path):
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    paths = NexaPaths(home=tmp_path / "home", agents_home=tmp_path / "agents")
+    directory = paths.user_skills_dir / "review"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text("---\ndescription: 检查代码\n---\n读取 checklist.md")
+    (directory / "checklist.md").write_text("必须检查测试")
+    provider = FakeProvider(
+        [
+            [
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(
+                        content=[
+                            ToolCall(
+                                id="skill",
+                                name="read",
+                                arguments={"path": str(directory / "SKILL.md")},
+                            ),
+                            ToolCall(
+                                id="ref",
+                                name="read",
+                                arguments={"path": str(directory / "checklist.md")},
+                            ),
+                        ]
+                    )
+                )
+            ],
+            [ProviderResponseEndEvent(message=AssistantMessage(content="完成"))],
+        ]
+    )
+    session = CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="test",
+            cwd=cwd,
+            storage=InMemorySessionStorage(),
+            resource_paths=NexaResourcePaths(cwd=cwd, paths=paths),
+        )
+    )
+    async for _ in session.prompt("检查代码"):
+        pass
+    _, system, messages, _ = provider.calls[1]
+    assert str(directory / "SKILL.md") in system
+    assert "读取 checklist.md" in messages[-2].text
+    assert "必须检查测试" in messages[-1].text
+    assert not messages[-1].is_error
+
 
 # ── 辅助函数 ──────────────────────────────────────────────────────────────────
 
@@ -109,7 +159,12 @@ def test_expand_skill_command():
 
     # 未命中返回 None。
     assert expand_skill_command("普通问题", [skill]) is None
-    assert expand_skill_command("/skill:nonexistent", [skill]) is None
+    with pytest.raises(ResourceError, match="未知技能"):
+        expand_skill_command("/skill:nonexistent", [skill])
+    with pytest.raises(ResourceError, match="指定技能名称"):
+        expand_skill_command("/skill:", [skill])
+    assert f"相对路径以 {Path(skill.path).resolve().parent}" in expanded
+    assert "add tests" in expand_skill_command("/skill:python-testing\tadd tests", [skill])
 
 
 # 测试 5：build_skill_index 输出

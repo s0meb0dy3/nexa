@@ -47,6 +47,41 @@ async def submit(app, pilot, text):
     await pilot.pause()
 
 
+async def test_skill_picker_completion_and_explicit_invocation(tmp_path):
+    paths = NexaPaths(home=tmp_path / "home", agents_home=tmp_path / "agents")
+    directory = paths.user_skills_dir / "review"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text("---\ndescription: 检查代码\n---\n先检查测试")
+    fake = provider("test")
+    app = NexaTuiApp(fake, model="model-a", cwd=tmp_path, paths=paths)
+    async with app.run_test(size=(100, 32)) as pilot:
+        await submit(app, pilot, "/skill")
+        assert isinstance(app.screen, ChoiceScreen)
+        assert not fake.calls
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.query_one(PromptInput).text == ""
+        await submit(app, pilot, "/skill")
+        app.screen.query_one(Input).value = "检查代码"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        editor = app.query_one(PromptInput)
+        assert editor.text == "/skill:review "
+        assert not fake.calls
+        editor.load_text("/skill:re")
+        await pilot.pause()
+        await pilot.press("tab")
+        assert editor.text == "/skill:review "
+        await submit(app, pilot, "/skill:review 检查修改")
+        assert "先检查测试" in fake.calls[0][2][-1].text
+        assert str(directory) in fake.calls[0][2][-1].text
+        assert "先用 read" in fake.calls[0][1]
+        await submit(app, pilot, "/skill:missing")
+        assert len(fake.calls) == 1
+        assert "未知技能" in app._state.chat_items[-1].text
+
+
 @pytest.mark.asyncio
 async def test_new_resume_model_and_restart(tmp_path, monkeypatch):
     paths = NexaPaths(home=tmp_path / "home")
@@ -173,6 +208,7 @@ async def test_exit_waits_for_cleanup_and_blocks_switching(tmp_path, monkeypatch
     started, cleaning, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     class Session:
+        skills = []
         provider = FakeProvider([])
         thinking = "default"
         latest_usage = None

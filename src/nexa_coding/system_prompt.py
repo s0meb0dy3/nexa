@@ -133,7 +133,12 @@ def format_skills_for_prompt(skills: Sequence[Skill]) -> str:
     每个技能列出 name / description / location，模型要用时自己 read 技能文件。
     """
 
-    lines = ["<available_skills>"]
+    lines = [
+        "任务符合技能描述时，先用 read 读取完整 SKILL.md，再按说明执行。",
+        "技能引用的相对路径以 SKILL.md 所在目录为基准。",
+        "技能不会自动执行脚本，需要时通过已有工具执行。",
+        "<available_skills>",
+    ]
     for skill in skills:
         lines.append(
             f'<skill name="{skill.name}" location="{skill.path}">{skill.description}</skill>'

@@ -1,6 +1,9 @@
 """本地命令元数据，同时用于帮助和补全。"""
 
+from collections.abc import Sequence
 from pathlib import Path
+
+from nexa_coding.skills import Skill
 
 COMMANDS = {
     "help": "显示命令和快捷键",
@@ -10,6 +13,7 @@ COMMANDS = {
     "model": "选择配置中的模型；也可输入 /model 档案名",
     "thinking": "查看思考设置；/thinking 等级 修改模型思考",
     "usage": "查看 API 实测上下文与模型上限",
+    "skill": "搜索选择技能；/skill:名称 请求 调用技能",
     "quit": "等待取消清理后退出",
 }
 
@@ -27,12 +31,16 @@ def parse_command(text: str) -> tuple[str, str] | None:
         if "/" in name or Path(token).exists():
             return None
         raise ValueError(f"未知命令 {token}；输入 /help 查看可用命令")
-    if argument.strip() and name in ("help", "new", "quit", "usage"):
+    if argument.strip() and name in ("help", "new", "quit", "usage", "skill"):
         raise ValueError(f"/{name} 不接受参数")
     return name, argument.strip()
 
 
-def completions(text: str) -> list[str]:
+def completions(text: str, skills: Sequence[Skill] = ()) -> list[str]:
     if not text.startswith("/") or any(c.isspace() for c in text):
         return []
+    if text.startswith("/skill:"):
+        return [
+            f"skill:{skill.name}" for skill in skills if f"/skill:{skill.name}".startswith(text)
+        ]
     return [name for name in COMMANDS if f"/{name}".startswith(text)]

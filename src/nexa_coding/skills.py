@@ -95,7 +95,7 @@ def _register_skills_from_dir(skills_dir: Path, skills_by_name: dict[str, Skill]
 def expand_skill_command(text: str, skills: list[Skill]) -> str | None:
     """如果输入是 /skill:name 命令，返回展开后的技能文本。
 
-    命中时返回带 <skill> 包裹的完整文本；否则返回 None。
+    普通输入返回 None；技能命令返回完整文本，名称无效时明确报错。
 
     参数格式：/skill:name 附加参数（可选）。
     """
@@ -105,22 +105,26 @@ def expand_skill_command(text: str, skills: list[Skill]) -> str | None:
         return None
 
     # 拆出命令头和参数："name 附加参数"。
-    command, _, args = stripped.partition(" ")
+    parts = stripped.split(maxsplit=1)
+    command = parts[0]
+    args = parts[1] if len(parts) > 1 else ""
     skill_name = command.removeprefix("/skill:").strip()
 
     if not skill_name:
-        return None
+        raise ResourceError("请指定技能名称，例如 /skill:review")
 
     for skill in skills:
         if skill.name == skill_name:
             # 用 <skill> 包裹，让模型清楚这是一段指令 + 用户给的参数。
             return (
                 f'<skill name="{skill.name}">\n'
+                f"技能文件：{skill.path}\n"
+                f"相对路径以 {Path(skill.path).resolve().parent} 为基准。\n"
                 f"<instructions>\n{skill.content}\n</instructions>\n"
                 f"<arguments>\n{args}\n</arguments>\n"
                 f"</skill>"
             )
-    return None
+    raise ResourceError(f"未知技能 {skill_name}；输入 /skill 查看已加载的技能")
 
 
 def build_skill_index(skills: list[Skill]) -> str:

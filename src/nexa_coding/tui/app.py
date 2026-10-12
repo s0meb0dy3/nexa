@@ -25,6 +25,7 @@ from nexa_coding.commands import COMMANDS, completions, parse_command
 from nexa_coding.config import load_config
 from nexa_coding.paths import NexaPaths
 from nexa_coding.providers import build_provider
+from nexa_coding.resources import NexaResourcePaths
 from nexa_coding.session import CodingSession, CodingSessionConfig
 from nexa_coding.session_manager import SessionManager
 from nexa_coding.tui.adapter import TuiEventAdapter
@@ -238,11 +239,16 @@ class NexaTuiApp(App):
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         editor = self._view.query_one(PromptInput)
         editor.styles.height = min(8, max(3, editor.wrapped_document.height + 2))
-        self._completion_items = completions(editor.text)
+        skills = self._session.skills if self._session else []
+        self._completion_items = completions(editor.text, skills)
+        descriptions = {**COMMANDS, **{f"skill:{s.name}": s.description for s in skills}}
         menu = self._view.query_one("#completions", OptionList)
         menu.clear_options()
         menu.add_options(
-            [Option(Text(f"/{name}  {COMMANDS[name]}"), id=name) for name in self._completion_items]
+            [
+                Option(Text(f"/{name}  {descriptions[name]}"), id=name)
+                for name in self._completion_items
+            ]
         )
         menu.display = bool(self._completion_items)
         if self._completion_items:
@@ -281,7 +287,8 @@ class NexaTuiApp(App):
         if command is not None:
             name, argument = command
             if self._command_busy or (
-                name in ("new", "resume", "model", "thinking", "tree") and self._state.running
+                name in ("new", "resume", "model", "thinking", "tree", "skill")
+                and self._state.running
             ):
                 self._state.add_tool("命令", "请等待当前任务完成，或按 Esc 取消")
                 self._refresh()
@@ -310,6 +317,7 @@ class NexaTuiApp(App):
                 model=self._model,
                 cwd=self._cwd,
                 storage=JsonlStorage(path),
+                resource_paths=NexaResourcePaths(cwd=self._cwd, paths=self._paths),
                 thinking=self._session.thinking if fresh and self._session else "default",
                 resolve_provider=self._sessions.resolve_provider,
             )
@@ -437,6 +445,7 @@ class NexaTuiApp(App):
                             model=profile.model,
                             cwd=self._cwd,
                             storage=JsonlStorage(self._session_path),
+                            resource_paths=NexaResourcePaths(cwd=self._cwd, paths=self._paths),
                             resolve_provider=self._sessions.resolve_provider,
                         ),
                         model_override=profile.model,
@@ -456,6 +465,22 @@ class NexaTuiApp(App):
                         )
                     self._refresh_environment()
                     self._state.add_tool("模型", f"已切换为 {profile.name} / {profile.model}")
+            elif name == "skill":
+                skills = self._ensure_session().skills
+                if not skills:
+                    directories = NexaResourcePaths(cwd=self._cwd, paths=self._paths).skills_dirs
+                    raise ValueError("暂无技能，已扫描：\n" + "\n".join(map(str, directories)))
+                selected_skill: str | None = await self.push_screen_wait(
+                    ChoiceScreen(
+                        "选择技能", [(s.name, f"{s.name} · {s.description}") for s in skills]
+                    )
+                )
+                if selected_skill:
+                    # 选择只填入草稿，用户补充任务后再发送。
+                    editor = self._view.query_one(PromptInput)
+                    text = f"/skill:{selected_skill} "
+                    editor.load_text(text)
+                    editor.move_cursor((0, len(text)))
             elif name == "usage":
                 self._ensure_session()
                 self._state.add_tool(

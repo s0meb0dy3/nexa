@@ -188,7 +188,9 @@ class CodingSession:
         skills = config.skills or load_skills(resource_paths)
 
         # 系统提示词：没给就用 build_system_prompt 自动构建。
-        tools = create_coding_tools(cwd)
+        tools = create_coding_tools(
+            cwd, skill_dirs=tuple(Path(skill.path).parent for skill in skills)
+        )
         system = config.system or build_system_prompt(
             BuildSystemPromptOptions(cwd=cwd, tools=tools, skills=skills)
         )

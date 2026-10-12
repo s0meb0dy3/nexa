@@ -34,6 +34,35 @@ def test_create_coding_tools_returns_four_tools(tmp_path):
     assert names == {"read", "write", "edit", "bash"}
 
 
+async def test_skill_directory_is_read_only_and_symlinks_cannot_escape(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    skill = tmp_path / "skills" / "review"
+    skill.mkdir(parents=True)
+    reference = skill / "checklist.md"
+    reference.write_text("检查清单")
+    outside = tmp_path / "private.txt"
+    outside.write_text("private")
+    link = skill / "link.md"
+    link.symlink_to(outside)
+    tools = create_coding_tools(project, skill_dirs=(skill,))
+    read = _get_tool(tools, "read")
+    assert not (await _execute(read, path=str(reference))).is_error
+    assert (await _execute(read, path=str(outside))).is_error
+    assert (await _execute(read, path=str(link))).is_error
+    assert (
+        await _execute(_get_tool(tools, "write"), path=str(reference), content="changed")
+    ).is_error
+    assert (
+        await _execute(
+            _get_tool(tools, "edit"),
+            path=str(reference),
+            edits=[{"oldText": "检查清单", "newText": "changed"}],
+        )
+    ).is_error
+    assert reference.read_text() == "检查清单"
+
+
 # ── 测试：read 工具 ───────────────────────────────────────────────────────────
 
 

@@ -35,8 +35,8 @@ DEFAULT_BASH_TIMEOUT = 30
 # ── 辅助函数 ──────────────────────────────────────────────────────────────────
 
 
-def _resolve_path(cwd: Path, path_str: str) -> Path:
-    """解析路径，确保在项目 cwd 内。
+def _resolve_path(cwd: Path, path_str: str, read_roots: tuple[Path, ...] = ()) -> Path:
+    """解析真实路径，确保在项目或明确允许读取的技能目录内。
 
     Args:
         cwd: 项目根目录
@@ -57,11 +57,9 @@ def _resolve_path(cwd: Path, path_str: str) -> Path:
     # 规范化（处理 .. 等）
     path = path.resolve()
 
-    # 检查是否在项目目录内
-    try:
-        path.relative_to(cwd.resolve())
-    except ValueError as e:
-        raise ValueError(f"路径越界：{path} 不在项目目录 {cwd} 内") from e
+    # 仅 read 传入技能目录；解析真实路径后检查，避免符号链接越界。
+    if not any(path.is_relative_to(root.resolve()) for root in (cwd, *read_roots)):
+        raise ValueError(f"路径越界：{path} 不在允许的文件目录内")
 
     return path
 
@@ -92,7 +90,7 @@ def _make_error(message: str, **details: Any) -> AgentToolResult:
 # ── 工具实现 ──────────────────────────────────────────────────────────────────
 
 
-def _create_read_tool(cwd: Path) -> AgentTool:
+def _create_read_tool(cwd: Path, read_roots: tuple[Path, ...] = ()) -> AgentTool:
     """创建 read 工具：读取文件内容。"""
 
     async def execute(tool_call_id: str, arguments: dict[str, Any]) -> AgentToolResult:
@@ -112,7 +110,7 @@ def _create_read_tool(cwd: Path) -> AgentTool:
 
         # 解析路径
         try:
-            path = _resolve_path(cwd, path_str)
+            path = _resolve_path(cwd, path_str, read_roots)
         except ValueError as e:
             return _make_error(str(e))
 
@@ -431,11 +429,14 @@ def _create_bash_tool(cwd: Path) -> AgentTool:
 # ── 工厂函数 ──────────────────────────────────────────────────────────────────
 
 
-def create_coding_tools(cwd: str | Path) -> tuple[AgentTool, ...]:
+def create_coding_tools(
+    cwd: str | Path, *, skill_dirs: tuple[Path, ...] = ()
+) -> tuple[AgentTool, ...]:
     """创建一组 coding tools。
 
     Args:
         cwd: 项目根目录，所有相对路径都基于此解析
+        skill_dirs: 已加载技能的目录，仅向 read 开放，包括技能参考文件。
 
     Returns:
         包含 read、write、edit、bash 四个工具的元组
@@ -443,7 +444,7 @@ def create_coding_tools(cwd: str | Path) -> tuple[AgentTool, ...]:
     cwd_path = Path(cwd).resolve()
 
     return (
-        _create_read_tool(cwd_path),
+        _create_read_tool(cwd_path, skill_dirs),
         _create_write_tool(cwd_path),
         _create_edit_tool(cwd_path),
         _create_bash_tool(cwd_path),
