@@ -12,6 +12,25 @@ from nexa_coding.session import CodingSession
 from nexa_coding.tui.app import NexaTuiApp
 
 
+async def test_tool_title_treats_command_as_plain_text(tmp_path):
+    from textual.widgets import Collapsible
+    from textual.widgets._collapsible import CollapsibleTitle
+
+    command = "python3 - <<'EOF'\np='[style=\"align-self:center\"] [bold]literal[/bold]'\nEOF"
+    app = NexaTuiApp(FakeProvider([]), model="test", cwd=tmp_path)
+    async with app.run_test() as pilot:
+        app._state.update_tool("code", "bash", "执行中", args={"command": command})
+        app._refresh()
+        await pilot.pause()
+        card = app.query_one(Collapsible)
+        assert command in card.query_one(CollapsibleTitle).label.plain
+        app._state.update_tool("code", "bash", "结束", output="[bold]output[/bold]")
+        app._refresh()
+        await pilot.pause()
+        assert command in card.query_one(CollapsibleTitle).label.plain
+        assert "结束" in card.query_one(CollapsibleTitle).label.plain
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("load_fails", [False, True])
 async def test_worker_failure_resets_ui(tmp_path, monkeypatch, load_fails):

@@ -44,8 +44,8 @@ async def main() -> None:
     # 从 ~/.nexa/config.toml 解析供应商档案（默认档案）。
     provider, profile = resolve_provider()
 
-    # 创建 Agent 循环，最多允许 5 轮。
-    agent = AgentLoop(provider, max_turns=5)
+    # 创建 Agent 循环，直到模型给出最终回答。
+    agent = AgentLoop(provider)
 
     # 定义工具列表。
     tools = [

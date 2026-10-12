@@ -81,6 +81,10 @@ bar shows the working directory, Git branch, provider, and active model.
 - Scroll up to read without following new output; Ctrl+End returns to the latest messages.
 - Escape cancels; Ctrl+T shows thinking; Ctrl+Q quits.
 
+Agent runs have no model-turn or tool-call count limit. They finish when the
+model responds without tool calls, or stop on cancellation or failure. Bash
+retains its default 30-second timeout, overridable through the tool's `timeout` argument.
+
 ## Interactive commands
 
 Type `/` to show commands, use Up/Down to select, and Tab to complete.

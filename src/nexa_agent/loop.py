@@ -35,14 +35,12 @@ class AgentLoop:
     1. 把消息发给模型，等待回复。
     2. 如果模型回复中包含工具调用，就执行工具，把结果追加到消息列表。
     3. 带着更新后的消息列表，再次请求模型。
-    4. 重复以上步骤，直到模型不再请求工具，或者达到最大轮次。
+    4. 重复以上步骤，直到模型不再请求工具，或被取消。
     """
 
-    def __init__(self, provider: ModelProvider, *, max_turns: int = 50) -> None:
+    def __init__(self, provider: ModelProvider) -> None:
         # provider 是具体的模型后端，例如 DeepSeek、OpenAI 等。
         self.provider = provider
-        # max_turns 防止模型反复调用工具，陷入死循环。
-        self.max_turns = max_turns
 
     async def run(
         self,
@@ -60,7 +58,8 @@ class AgentLoop:
         # 通知外部：Agent 开始运行了。
         yield AgentStartEvent()
 
-        for _ in range(self.max_turns):
+        # 不限制模型轮次或工具次数；最终回答结束循环，取消向上传播。
+        while True:
             # 通知外部：新一轮开始。
             yield TurnStartEvent()
 

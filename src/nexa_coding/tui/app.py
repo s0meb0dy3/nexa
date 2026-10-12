@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.markdown import Markdown as RichMarkdown
+from rich.markup import escape
 from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
@@ -575,7 +576,8 @@ class NexaTuiApp(App):
                     self._tool_outputs[index] = output_widget
                     widget = ToolDetail(
                         output_widget,
-                        title=item.text,
+                        # 工具参数是代码，不能当作界面 markup 解析。
+                        title=escape(item.text),
                         classes="tool",
                     )
                 elif item.kind == ChatItemKind.assistant:
@@ -609,7 +611,7 @@ class NexaTuiApp(App):
                 if item.status == "已中断":
                     symbol = "■"
                 timing = "历史记录" if item.historical else f"{elapsed:.1f}s"
-                widget.title = f"{symbol} {item.text} · {item.status} · {timing}"
+                widget.title = escape(f"{symbol} {item.text} · {item.status} · {timing}")
                 self._tool_outputs[index].update(item.output or "等待工具结果…")
                 if item.error:
                     widget.collapsed = False

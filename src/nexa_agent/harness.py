@@ -27,7 +27,6 @@ class AgentHarnessConfig:
     model: str
     system: str = ""
     tools: tuple[AgentTool, ...] = ()
-    max_turns: int = 10
 
 
 class AgentHarness:
@@ -107,7 +106,7 @@ class AgentHarness:
                 event: AgentEvent = MessageEndEvent(message=user_message)
                 await self._notify(event)
                 yield event
-            loop = AgentLoop(self._config.provider, max_turns=self._config.max_turns)
+            loop = AgentLoop(self._config.provider)
             async with aclosing(
                 loop.run(
                     model=self.model,

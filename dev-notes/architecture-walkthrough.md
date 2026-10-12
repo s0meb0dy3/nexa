@@ -19,7 +19,7 @@ sequenceDiagram
     U->>CS: prompt("帮我读 README")
     CS->>H: harness.prompt(text)
     H->>L: run(...)
-    loop 每轮（max_turns 限制）
+    loop 每轮（无次数限制，最终回答或取消时结束）
         L->>P: stream_response(messages, tools)
         P->>API: HTTP SSE
         API-->>P: response_start / tool_call / response_end
@@ -132,7 +132,7 @@ flowchart TD
 
 - `loop.py` `run()` 主循环：
   - `loop.py` `yield AgentStartEvent()`
-  - `loop.py` `for _ in range(self.max_turns)` — 防 model 反复调工具死循环
+  - `loop.py` `while True` — 持续执行，直到模型不再请求工具或被取消
   - `loop.py` 消费 `_assistant_events()`（①→②的翻译层），从 `MessageEndEvent` 取出完整助手消息
   - `loop.py` `if not message.tool_calls: break` — **循环的终止条件**：模型不再要工具
   - 否则逐个执行工具，把 `ToolResultMessage` 追加进 history，进入下一轮
@@ -148,7 +148,7 @@ agent_start → turn_start → message_start → message_end
 
 ```mermaid
 flowchart TD
-    A["AgentStartEvent"] --> B["for _ in range(max_turns)"]
+    A["AgentStartEvent"] --> B["while True"]
     B --> C["调用模型（消费 ProviderEvent 流）"]
     C --> D{"message.tool_calls?"}
     D -- "无 → 终止条件" --> E["TurnEndEvent"]

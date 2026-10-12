@@ -222,30 +222,35 @@ async def test_loop_unknown_tool():
 
 
 @pytest.mark.asyncio
-async def test_loop_max_turns():
-    """达到最大轮次时应该停止循环。"""
+async def test_loop_has_no_turn_or_tool_count_limit():
+    """超过原来的 50 轮仍继续，每轮的多个工具都执行，最终回答结束。"""
 
-    # 准备：Provider 每次都请求调用工具（死循环场景）
+    rounds = 55
     provider = FakeProvider(
         [
             [
                 ProviderResponseEndEvent(
                     message=AssistantMessage(
-                        content=[ToolCall(id=f"call-{i}", name="loop_tool", arguments={})]
+                        content=[
+                            ToolCall(id=f"call-{i}-{j}", name="loop_tool", arguments={})
+                            for j in range(3)
+                        ]
                     )
                 ),
             ]
-            for i in range(5)  # 准备 5 轮，但 max_turns=3
+            for i in range(rounds)
         ]
+        + [[ProviderResponseEndEvent(message=AssistantMessage(content="完成"))]]
     )
 
     tool = _make_tool("loop_tool")
-    agent = AgentLoop(provider, max_turns=3)
+    agent = AgentLoop(provider)
     events = await _collect_events(agent, tools=[tool])
 
-    # 验证：只执行了 3 轮
     turn_starts = [e for e in events if isinstance(e, TurnStartEvent)]
-    assert len(turn_starts) == 3
+    assert len(turn_starts) == rounds + 1
+    assert len([e for e in events if isinstance(e, ToolExecutionEndEvent)]) == rounds * 3
+    assert events[-1].messages[-1].text == "完成"
 
 
 @pytest.mark.asyncio

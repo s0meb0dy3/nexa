@@ -326,7 +326,6 @@ async def test_cancel_stops_loop():
         model="test",
         system="",
         tools=(tool,),
-        max_turns=10,  # 允许 10 轮
     )
     harness = AgentHarness(config)
 
