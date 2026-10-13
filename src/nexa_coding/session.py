@@ -38,6 +38,7 @@ from nexa_agent.session.memory import SessionState
 from nexa_agent.session.storage import JsonlStorage
 from nexa_agent.session.tree import path_to_entry
 from nexa_coding.compaction import SUMMARY_SYSTEM, cut_point, estimate_tokens, serialize_history
+from nexa_coding.context import discover_project_context
 from nexa_coding.paths import NexaPaths
 from nexa_coding.resources import NexaResourcePaths
 from nexa_coding.skills import Skill, expand_skill_command, load_skills
@@ -198,7 +199,12 @@ class CodingSession:
             cwd, skill_dirs=tuple(Path(skill.path).parent for skill in skills)
         )
         system = config.system or build_system_prompt(
-            BuildSystemPromptOptions(cwd=cwd, tools=tools, skills=skills)
+            BuildSystemPromptOptions(
+                cwd=cwd,
+                tools=tools,
+                skills=skills,
+                context_files=discover_project_context(resource_paths),
+            )
         )
 
         # 用恢复的消息建 harness；空会话则从空历史开始。

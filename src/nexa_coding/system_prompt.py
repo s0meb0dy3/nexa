@@ -26,7 +26,7 @@ DEFAULT_IDENTITY = (
 class ProjectContextFile:
     """一个项目上下文文件（例如 AGENTS.md）。
 
-    这里只负责格式化，不负责发现文件——发现是 Phase 19 的事。
+    这里只定义数据，文件发现和读取由 context.py 负责。
     """
 
     path: Path
@@ -107,10 +107,16 @@ def format_guidelines(tools: Sequence[AgentTool], extra: Sequence[str]) -> str:
     # 每个工具推导一条"如何使用"的指南。
     derived = [f"- {tool.name}: 使用 {tool.name} 工具时，{tool.description}" for tool in tools]
 
+    principles = [
+        "- 修改前读取相关代码和适用的项目指令。",
+        "- 保持修改聚焦，遵循项目架构与风格，不覆盖或丢弃用户已有的无关修改。",
+        "- 使用项目规定的命令和包管理器，修改后运行相关测试及格式、lint、类型检查。",
+        "- 如实报告修改与检查结果，未运行的检查不能声称通过。",
+        "- 破坏性操作或重大设计歧义尚未得到明确授权时，先向用户确认。",
+        "- 回答简洁，说明关键文件路径和未完成事项。",
+    ]
     # dict.fromkeys 保持首次出现顺序并去重。
-    combined = list(dict.fromkeys([*derived, *extra]))
-    if not combined:
-        return ""
+    combined = list(dict.fromkeys([*derived, *principles, *extra]))
     lines = ["使用指南："]
     lines.extend(combined)
     return "\n".join(lines)
@@ -119,7 +125,12 @@ def format_guidelines(tools: Sequence[AgentTool], extra: Sequence[str]) -> str:
 def format_project_context(files: Sequence[ProjectContextFile]) -> str:
     """把项目上下文文件格式化成 <project_instructions> XML。"""
 
-    blocks = []
+    blocks = [
+        "用户级项目指令适用于所有项目。目录内 AGENTS.md 的规则适用于该目录及子目录；"
+        ".nexa/AGENTS.md 和 .agents/AGENTS.md 适用于它们所在的启动目录。"
+        "同一范围内的规则依次叠加；发生冲突时，用户当前明确要求优先，"
+        "其后在适用范围内遵循更具体目录的规则。"
+    ]
     for file in files:
         blocks.append(
             f'<project_instructions file="{file.path}">\n{file.content}\n</project_instructions>'

@@ -261,6 +261,11 @@ flowchart LR
 
 ## 九、资源与路径：四级优先级发现
 
+`context.py` 在 Session 加载时发现用户级与项目祖先链上的 `AGENTS.md`，
+全文带路径传入 `build_system_prompt(context_files=...)`。规则是叠加而非覆盖，
+相同真实路径去重；不递归扫描子目录，也不在每次 API 请求时重新读取。
+默认编码原则由 `system_prompt.py` 定义，日期不自动注入。
+
 - `nexa_coding/paths.py` — `NexaPaths` 唯一真相源（sessions/skills/prompts 的所有位置；
   `project_session_dir` = slug 可读名 + sha256 短哈希）
 - `nexa_coding/resources.py` — `NexaResourcePaths.skills_dirs/prompts_dirs`（优先级递增）：

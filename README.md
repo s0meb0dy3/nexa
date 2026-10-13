@@ -113,6 +113,32 @@ and does not fetch a remote model catalog.
 
 ## Development
 
+Project instructions load automatically into the default system prompt, in order:
+
+1. `~/.nexa/AGENTS.md`
+2. `~/.agents/AGENTS.md`
+3. Each `AGENTS.md` from the nearest project root down to the startup directory
+4. `<cwd>/.nexa/AGENTS.md`
+5. `<cwd>/.agents/AGENTS.md`
+
+The nearest ancestor containing `.git`, `pyproject.toml`, `uv.lock`, `setup.py`,
+or `package.json` is the project root. Without a marker, only the startup
+directory is checked for ancestor instructions. Child directories are not scanned.
+Files are concatenated with their source paths; duplicate resolved paths load
+once. User-level rules apply globally, directory rules apply to that directory
+and descendants, and `.nexa`/`.agents` instructions apply to their startup directory.
+The prompt directs the model to follow the user's explicit request first and
+more specific applicable directory rules when project rules conflict.
+
+Instructions are read when a session is loaded, not on every API request.
+Restart or resume the session after editing them. No date is added automatically,
+and there is no `/reload` command or project-trust mechanism. Unreadable or invalid
+UTF-8 instruction files produce an error instead of silently omitting rules.
+An explicit SDK `config.system` bypasses default prompt construction.
+Default coding guidelines require focused changes, preserving user edits,
+project commands, relevant checks, and honest reporting. Prompt instructions
+guide the model; they do not enforce filesystem permissions.
+
 Skills load from `~/.nexa/skills/`, `~/.agents/skills/`, `<cwd>/.nexa/skills/`,
 and `<cwd>/.agents/skills/`, in that order; later sources override matching names.
 Use `<name>/SKILL.md` (or `<name>.md`) with a description in frontmatter:
